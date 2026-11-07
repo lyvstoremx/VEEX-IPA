@@ -1,4 +1,4 @@
-log("VEEX v56")
+log("VEEX v58")
 
 local function pickmax(name)
   local best, bn = nil, -1
@@ -29,19 +29,22 @@ local gph = C and i2c_mptr(C, "get_pixelHeight", 0)
 local tp = P and clstype(P)
 local tc = C and clstype(C)
 local gfwd = i2c_ptr("Transform", "get_forward", 0)
+local lookat = i2c_ptr("Transform", "LookAt", 1)
 
 local ghp = P and (i2c_mptr(P, "get_HP", 0) or i2c_mptr(P, "get_Hp", 0)
   or i2c_mptr(P, "get_CurHP", 0) or i2c_mptr(P, "get_Health", 0))
-log("hp=" .. tostring(ghp) .. " fwd=" .. tostring(gfwd))
+log("hp=" .. tostring(ghp) .. " look=" .. tostring(lookat))
 
 local cam, cw, ch, frames, dclog = nil, 0, 0, 0, 0
 local boxes = {}
+local aimT = nil
 
 local MAXHP = 200
 local MAXD  = 300
 local NAMED = 15
-local NCAP  = 80
-local BCAP  = 60
+local NCAP  = 60
+local BCAP  = 30
+local AIMPX = 150
 
 local function kl(p)
   if not p or p == 0 then return 0 end
@@ -77,6 +80,7 @@ end
 
 local function update()
   boxes = {}
+  aimT = nil
   if not (fot and gtr and w2s and tp and tc) then return end
   if not cam then pickCam() end
   if not cam then return end
@@ -85,6 +89,9 @@ local function update()
     pickCam()
     if not cam or cw == 0 or ch == 0 then return end
   end
+
+  local wantname = get("name")
+  local wanthp = get("hp")
 
   local mx, my, mz = camPos()
   local fx3, fy3, fz3 = nil, nil, nil
@@ -110,7 +117,7 @@ local function update()
         local gp = i2c_mptr(kl(tr), "get_position", 0)
         if gp then
           local x, y, z = pos3(gp, tr)
-          if x then list[#list + 1] = { e = e, x = x, y = y, z = z } end
+          if x then list[#list + 1] = { e = e, t = tr, x = x, y = y, z = z } end
         end
       end
     end
@@ -125,7 +132,7 @@ local function update()
       if dep > 0.2 and dep < 9 then
         local px, py, pz = dx - dep * fx3, dy - dep * fy3, dz - dep * fz3
         local perp = math.sqrt(px * px + py * py + pz * pz)
-        if perp < 1.6 then cand[#cand + 1] = { i = i, dep = dep, perp = perp } end
+        if perp < 1.6 then cand[#cand + 1] = { i = i, dep = dep } end
       end
     end
     table.sort(cand, function(a, b) return a.dep < b.dep end)
@@ -144,7 +151,6 @@ local function update()
     end
     sk1 = bi
   end
-  if dclog < 3 then log("sk=" .. sk1 .. "," .. sk2 .. " n=" .. #list) end
 
   local fx = sw() / math.max(cw, 1)
   local fy = sh() / math.max(ch, 1)
@@ -163,20 +169,36 @@ local function update()
         local h = ay2 - ay1
         if h > 4 and cx > 0 and cx < W and ay1 > 0 and ay1 < H then
           local nm, hp = nil, nil
-          if gnk and hz < NAMED then
+          if wantname and gnk and hz < NAMED then
             local np = call(gnk, it.e)
             if np and np ~= 0 then nm = str(np) end
           end
-          if ghp then
+          if wanthp and ghp then
             hp = calli(ghp, it.e)
             if hp and hp > MAXHP then hp = MAXHP end
             if hp and hp < 0 then hp = 0 end
           end
-          boxes[#boxes + 1] = { cx = cx, y1 = ay1, h = h, d = hz, nm = nm, hp = hp }
+          boxes[#boxes + 1] = { cx = cx, y1 = ay1, h = h, d = hz, nm = nm, hp = hp, t = it.t }
           count = count + 1
         end
       end
     end
+  end
+
+  if get("aim") then
+    local cx0, cy0 = W / 2, H * 0.35
+    local best, bt = 1e9, nil
+    for _, b in ipairs(boxes) do
+      if b.d < 150 then
+        local dx, dy = b.cx - cx0, (b.y1 + b.h * 0.12) - cy0
+        local d2 = dx * dx + dy * dy
+        if d2 < AIMPX * AIMPX and d2 < best then
+          best = d2
+          bt = b
+        end
+      end
+    end
+    if bt then aimT = bt end
   end
 
   dclog = dclog + 1
@@ -189,7 +211,7 @@ function tick()
   if not get("esp") then return end
 
   frames = frames + 1
-  if frames % 2 == 1 then update() end
+  if frames % 3 == 1 then update() end
 
   local W, H = sw(), sh()
   local n = #boxes
@@ -220,6 +242,26 @@ function tick()
     end
     if get("dist") and b.d < 60 then
       text(string.format("%dm", math.floor(b.d)), b.cx - 8, b.y1 + b.h + 2, cr, cg, cb, 1)
+    end
+  end
+
+  if get("aim") then
+    local cx0, cy0 = W / 2, H * 0.35
+    local px, py = nil, nil
+    for k = 0, 23 do
+      local a = k / 24 * 6.28318
+      local x, y = cx0 + math.cos(a) * AIMPX, cy0 + math.sin(a) * AIMPX
+      if px then line(px, py, x, y, 1, 1, 1, 0.22) end
+      px, py = x, y
+    end
+    if aimT then
+      local tx, ty = aimT.cx, aimT.y1 + aimT.h * 0.12
+      line(tx - 6, ty, tx + 6, ty, 0.3, 1, 0.35, 1)
+      line(tx, ty - 6, tx, ty + 6, 0.3, 1, 0.35, 1)
+      if lookat and cam then
+        local ctr = call(gtr, cam)
+        if ctr and ctr ~= 0 then callv(lookat, ctr, aimT.t) end
+      end
     end
   end
 
