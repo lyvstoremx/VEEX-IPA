@@ -1,5 +1,9 @@
 // Copyright (c) 2013, Facebook, Inc.
-#import <stddef.h>
+#ifndef FISHHOOK_H
+#define FISHHOOK_H
+
+#include <stddef.h>
+#include <stdint.h>
 
 struct rebinding {
   const char *name;
@@ -16,3 +20,5 @@ struct rebindings_entry {
 int rebind_symbols(struct rebinding rebindings[], size_t rebindings_nel);
 int rebind_symbols_image(void *header, intptr_t slide,
                          struct rebinding rebindings[], size_t rebindings_nel);
+
+#endif
