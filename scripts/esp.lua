@@ -1,4 +1,4 @@
-log("VEEX v49")
+log("VEEX v50")
 
 local function pickmax(name)
   local best, bn = nil, -1
@@ -52,9 +52,11 @@ log("hp=" .. tostring(ghp))
 local cam, cw, ch, frames, hplog = nil, 0, 0, 0, 0
 local boxes = {}
 
-local MAXD  = 250
-local NAMED = 40
-local ME    = 1.2
+local MAXD  = 300
+local NAMED = 30
+local ME    = 2.0
+local NCAP  = 80
+local BCAP  = 60
 
 local function kl(p)
   if not p or p == 0 then return 0 end
@@ -96,13 +98,18 @@ local function update()
   if not (fot and gtr and w2s and tp and tc) then return end
   if not cam then pickCam() end
   if not cam then return end
+  if cw == 0 or ch == 0 then
+    cam = nil
+    pickCam()
+    if not cam or cw == 0 or ch == 0 then return end
+  end
 
   local mx, my, mz = camPos()
 
   local arr = callv(fot, 0, tp)
   if not arr or arr == 0 then return end
   local n = arrlen(arr)
-  if n > 40 then n = 40 end
+  if n > NCAP then n = NCAP end
 
   local fx = sw() / math.max(cw, 1)
   local fy = sh() / math.max(ch, 1)
@@ -110,7 +117,7 @@ local function update()
   local count = 0
 
   for i = 0, n - 1 do
-    if count >= 25 then break end
+    if count >= BCAP then break end
     local e = arrat(arr, i)
     if e and e ~= 0 then
       local x, y, z = worldPos(e)
@@ -122,13 +129,13 @@ local function update()
         end
         if not skip then
           local hx, hy, hz = w2s3(w2s, cam, x, y + 1.7, z)
-          if hz and hz > 0.5 and hz < MAXD then
+          if hz and hz > 1 and hz < MAXD then
             local fxx, fyy = w2s3(w2s, cam, x, y + 0.1, z)
             local cx = ((hx + fxx) / 2) * fx
             local ay1 = H - hy * fy
             local ay2 = H - fyy * fy
             local h = ay2 - ay1
-            if h > 8 and cx > 0 and cx < W and ay1 > 0 and ay1 < H then
+            if h > 4 and cx > 0 and cx < W and ay1 > 0 and ay1 < H then
               local nm, hp = nil, nil
               if gnk and hz < NAMED then
                 local np = call(gnk, e)
@@ -157,6 +164,7 @@ end
 
 function tick()
   clear()
+  local by = sh() - 22
   if not get("esp") then return end
 
   frames = frames + 1
@@ -164,6 +172,10 @@ function tick()
 
   local W, H = sw(), sh()
   local n = #boxes
+
+  if not cam then
+    text("sin camara", 10, by, 1, 1, 0, 1)
+  end
 
   for i, b in ipairs(boxes) do
     local w = b.h * 0.45
