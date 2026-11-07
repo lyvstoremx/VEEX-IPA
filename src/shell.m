@@ -791,10 +791,10 @@ static intptr_t (*o_dyld_get_image_vmaddr_slide)(uint32_t) = NULL;
 static int (*o_csops)(pid_t, unsigned int, void *, size_t) = NULL;
 static int (*o_sysctl)(int *, u_int, void *, size_t *, void *, size_t) = NULL;
 static int (*o_sysctlbyname)(const char *, void *, size_t *, void *, size_t) = NULL;
-static OSStatus (*o_sscv)(void *, SecCSFlags, void *) = NULL;
-static OSStatus (*o_sscvw)(void *, SecCSFlags, void *, CFErrorRef *) = NULL;
-static OSStatus (*o_scv)(void *, SecCSFlags, void *) = NULL;
-static OSStatus (*o_scvw)(void *, SecCSFlags, void *, CFErrorRef *) = NULL;
+static OSStatus (*o_sscv)(void *, uint32_t, void *) = NULL;
+static OSStatus (*o_sscvw)(void *, uint32_t, void *, CFErrorRef *) = NULL;
+static OSStatus (*o_scv)(void *, uint32_t, void *) = NULL;
+static OSStatus (*o_scvw)(void *, uint32_t, void *, CFErrorRef *) = NULL;
 static CFTypeRef (*o_stcve)(void *, CFStringRef, CFErrorRef *) = NULL;
 
 static uint32_t gMyIdx = 0xFFFFFFFFu;
@@ -853,19 +853,19 @@ static int h_sysctlbyname(const char *nm, void *oldp, size_t *oldlenp, void *new
     return r;
 }
 
-static OSStatus h_sscv(void *c, SecCSFlags f, void *req) {
+static OSStatus h_sscv(void *c, uint32_t f, void *req) {
     if (o_sscv) o_sscv(c, f, req);
     return 0;
 }
-static OSStatus h_sscvw(void *c, SecCSFlags f, void *req, CFErrorRef *e) {
+static OSStatus h_sscvw(void *c, uint32_t f, void *req, CFErrorRef *e) {
     if (o_sscvw) o_sscvw(c, f, req, e);
     return 0;
 }
-static OSStatus h_scv(void *c, SecCSFlags f, void *req) {
+static OSStatus h_scv(void *c, uint32_t f, void *req) {
     if (o_scv) o_scv(c, f, req);
     return 0;
 }
-static OSStatus h_scvw(void *c, SecCSFlags f, void *req, CFErrorRef *e) {
+static OSStatus h_scvw(void *c, uint32_t f, void *req, CFErrorRef *e) {
     if (o_scvw) o_scvw(c, f, req, e);
     return 0;
 }
@@ -898,11 +898,11 @@ static void vxInstallHooks(void) {
         { "csops",                        h_csops,                       (void **)&o_csops },
         { "sysctl",                       h_sysctl,                      (void **)&o_sysctl },
         { "sysctlbyname",                 h_sysctlbyname,                (void **)&o_sysctlbyname },
-        { "SecStaticCodeCheckValidity",         h_sscv,  (void **)&o_sscv },
+        { "SecStaticCodeCheckValidity",           h_sscv,  (void **)&o_sscv },
         { "SecStaticCodeCheckValidityWithErrors", h_sscvw, (void **)&o_sscvw },
-        { "SecCodeCheckValidity",               h_scv,   (void **)&o_scv },
-        { "SecCodeCheckValidityWithErrors",     h_scvw,  (void **)&o_scvw },
-        { "SecTaskCopyValueForEntitlement",     h_stcve, (void **)&o_stcve },
+        { "SecCodeCheckValidity",                 h_scv,   (void **)&o_scv },
+        { "SecCodeCheckValidityWithErrors",       h_scvw,  (void **)&o_scvw },
+        { "SecTaskCopyValueForEntitlement",       h_stcve, (void **)&o_stcve },
     };
     int e = rebind_symbols(rb, 12);
     vxFindSelf();
