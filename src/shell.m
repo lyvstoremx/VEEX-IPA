@@ -18,6 +18,7 @@
 
 // ======== ESCALON DE PRUEBA ========
 #define VX_STAGE 1
+#define VX_FPS 30
 
 #define SCRIPT_API @"https://api.github.com/repos/lyvstoremx/VEEX-IPA/contents/scripts/esp.lua"
 #define SCRIPT_RAW @"https://raw.githubusercontent.com/lyvstoremx/VEEX-IPA/main/scripts/esp.lua"
@@ -38,7 +39,7 @@ static void vxLog(NSString *fmt, ...) {
     va_end(ap);
     if (!gLog) gLog = [NSMutableString new];
     [gLog appendFormat:@"%@\n", s];
-    if (gLog.length > 24000) [gLog deleteCharactersInRange:NSMakeRange(0, gLog.length - 24000)];
+    if (gLog.length > 12000) [gLog deleteCharactersInRange:NSMakeRange(0, gLog.length - 12000)];
     dispatch_async(dispatch_get_main_queue(), ^{
         if (gLogView) {
             gLogView.text = gLog;
@@ -66,11 +67,14 @@ static void vxLog(NSString *fmt, ...) {
         NSString *t = a[0];
         if ([t isEqualToString:@"rect"]) {
             [a[2] setStroke];
-            CGContextSetLineWidth(c, 1.5);
+            CGContextSetLineWidth(c, 1.6);
             CGContextStrokeRect(c, CGRectFromString(a[1]));
+        } else if ([t isEqualToString:@"fill"]) {
+            [a[2] setFill];
+            CGContextFillRect(c, CGRectFromString(a[1]));
         } else if ([t isEqualToString:@"line"]) {
             [a[3] setStroke];
-            CGContextSetLineWidth(c, 1.2);
+            CGContextSetLineWidth(c, 1.3);
             CGPoint p1 = CGPointFromString(a[1]), p2 = CGPointFromString(a[2]);
             CGContextMoveToPoint(c, p1.x, p1.y);
             CGContextAddLineToPoint(c, p2.x, p2.y);
@@ -343,16 +347,16 @@ static void *vxFindClass(const char *name) {
 
 typedef struct { float x, y, z; } VXVec3;
 
-// El MethodInfo trae el puntero de código en el primer campo
 static void *vxCode(void *mi) {
     if (!mi) return NULL;
-    void *p = *(void **)mi;
-    return p;
+    return *(void **)mi;
 }
 
 // ============ LUA ============
 static lua_State *L = NULL;
 static CADisplayLink *gLink = nil;
+
+void vxPauseLink(BOOL p) { if (gLink) gLink.paused = p; }
 
 static int l_log(lua_State *S) {
     const char *s = lua_tostring(S, 1);
@@ -364,6 +368,7 @@ static int l_get(lua_State *S) {
     lua_pushboolean(S, k ? vxOn([NSString stringWithUTF8String:k]) : 0);
     return 1;
 }
+static int l_pause(lua_State *S) { vxPauseLink(lua_toboolean(S, 1)); return 0; }
 static int l_w32(lua_State *S) { *(uint32_t *)VXP(lua_tointeger(S,1)) = (uint32_t)lua_tointeger(S,2); return 0; }
 static int l_wf(lua_State *S)  { *(float *)VXP(lua_tointeger(S,1)) = (float)lua_tonumber(S,2); return 0; }
 static int l_r32(lua_State *S) { lua_pushinteger(S, *(uint32_t *)VXP(lua_tointeger(S,1))); return 1; }
@@ -385,9 +390,7 @@ static int l_wv3(lua_State *S) {
 }
 static int l_rv3(lua_State *S) {
     float *p = VXP(lua_tointeger(S, 1));
-    lua_pushnumber(S, p[0]);
-    lua_pushnumber(S, p[1]);
-    lua_pushnumber(S, p[2]);
+    lua_pushnumber(S, p[0]); lua_pushnumber(S, p[1]); lua_pushnumber(S, p[2]);
     return 3;
 }
 static int l_sc(lua_State *S) { lua_pushnumber(S, [UIScreen mainScreen].scale); return 1; }
@@ -568,13 +571,6 @@ static int l_callv(lua_State *S) {
     if (r) lua_pushinteger(S, (lua_Integer)(uintptr_t)r); else lua_pushnil(S);
     return 1;
 }
-static int l_callv3(lua_State *S) {
-    void *m = VXP(lua_tointeger(S,1)), *o = VXP(lua_tointeger(S,2)), *exc = NULL;
-    void *a[3] = { VXP(lua_tointeger(S,3)), VXP(lua_tointeger(S,4)), VXP(lua_tointeger(S,5)) };
-    void *r = p_runtime_invoke(m, o, a, &exc);
-    if (r) lua_pushinteger(S, (lua_Integer)(uintptr_t)r); else lua_pushnil(S);
-    return 1;
-}
 static int l_arrlen(lua_State *S) { lua_pushinteger(S, *(uint64_t *)((char *)VXP(lua_tointeger(S,1)) + 24)); return 1; }
 static int l_arrat(lua_State *S) {
     void *a = VXP(lua_tointeger(S,1));
@@ -621,6 +617,11 @@ static int l_rect(lua_State *S) {
     [gCanvas.cmds addObject:@[@"rect", NSStringFromCGRect(r), vxCol(S, 5)]];
     return 0;
 }
+static int l_fill(lua_State *S) {
+    CGRect r = CGRectMake(lua_tonumber(S,1), lua_tonumber(S,2), lua_tonumber(S,3), lua_tonumber(S,4));
+    [gCanvas.cmds addObject:@[@"fill", NSStringFromCGRect(r), vxCol(S, 5)]];
+    return 0;
+}
 static int l_line(lua_State *S) {
     CGPoint a = CGPointMake(lua_tonumber(S,1), lua_tonumber(S,2));
     CGPoint b = CGPointMake(lua_tonumber(S,3), lua_tonumber(S,4));
@@ -636,20 +637,23 @@ static int l_text(lua_State *S) {
 
 static void vxTick(void) {
     if (!L) return;
-    lua_getglobal(L, "tick");
-    if (lua_isfunction(L, -1)) {
-        if (lua_pcall(L, 0, 0, 0) != LUA_OK) {
-            const char *e = lua_tostring(L, -1);
-            if (e) vxLog(@"[L] tick err: %s", e);
-            lua_pop(L, 1);
-        }
-    } else lua_pop(L, 1);
-    [gCanvas setNeedsDisplay];
+    @autoreleasepool {
+        lua_getglobal(L, "tick");
+        if (lua_isfunction(L, -1)) {
+            if (lua_pcall(L, 0, 0, 0) != LUA_OK) {
+                const char *e = lua_tostring(L, -1);
+                if (e) vxLog(@"[L] tick err: %s", e);
+                lua_pop(L, 1);
+            }
+        } else lua_pop(L, 1);
+        [gCanvas setNeedsDisplay];
+    }
 }
 
 static void vxReg(lua_State *S) {
     lua_register(S, "log", l_log);
     lua_register(S, "get", l_get);
+    lua_register(S, "pause", l_pause);
     lua_register(S, "w32", l_w32);
     lua_register(S, "wf", l_wf);
     lua_register(S, "r32", l_r32);
@@ -678,11 +682,11 @@ static void vxReg(lua_State *S) {
     lua_register(S, "i2c_mptr", l_i2c_mptr);
     lua_register(S, "call", l_call);
     lua_register(S, "callv", l_callv);
-    lua_register(S, "callv3", l_callv3);
     lua_register(S, "arrlen", l_arrlen);
     lua_register(S, "arrat", l_arrat);
     lua_register(S, "clear", l_clear);
     lua_register(S, "rect", l_rect);
+    lua_register(S, "fill", l_fill);
     lua_register(S, "line", l_line);
     lua_register(S, "text", l_text);
 }
@@ -741,8 +745,11 @@ void runScript(void) {
         if (!gLink) {
             CADisplayLink *ln = [CADisplayLink displayLinkWithTarget:[NSBlockOperation blockOperationWithBlock:^{ vxTick(); }]
                                                            selector:@selector(main)];
+            ln.preferredFramesPerSecond = VX_FPS;
             gLink = ln;
             [ln addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
+        } else {
+            gLink.paused = NO;
         }
     });
 }
@@ -909,23 +916,17 @@ static void buildUI(void) {
     p1.axis = UILayoutConstraintAxisVertical; p1.spacing = 5;
     [gPages[1] addSubview:p1];
     [p1 addArrangedSubview:vxRow(@"Aimbot",     vxSw(@"aim", NO))];
-    [p1 addArrangedSubview:vxRow(@"Silencioso", vxSw(@"aimsilent", YES))];
     [p1 addArrangedSubview:vxRow(@"FOV 4°",     vxSw(@"aimfov", YES))];
     [p1 addArrangedSubview:vxRow(@"Suave 0.30", vxSw(@"aimsmooth", YES))];
-    [p1 addArrangedSubview:vxRow(@"Cabeza",     vxSw(@"aimhead", YES))];
 
     UIStackView *p2 = [[UIStackView alloc] initWithFrame:gPages[2].bounds];
     p2.axis = UILayoutConstraintAxisVertical; p2.spacing = 5;
     [gPages[2] addSubview:p2];
-    [p2 addArrangedSubview:vxRow(@"Grosor 1.5", vxSw(@"thick", YES))];
     [p2 addArrangedSubview:vxRow(@"Esqueleto",  vxSw(@"skel", NO))];
-    [p2 addArrangedSubview:vxRow(@"Snapline",   vxSw(@"snap", NO))];
 
     UIStackView *p3 = [[UIStackView alloc] initWithFrame:gPages[3].bounds];
     p3.axis = UILayoutConstraintAxisVertical; p3.spacing = 5;
     [gPages[3] addSubview:p3];
-    [p3 addArrangedSubview:vxRow(@"Sin retroceso",  vxSw(@"norecoil", NO))];
-    [p3 addArrangedSubview:vxRow(@"Sin dispersión", vxSw(@"nospread", NO))];
 
     UIStackView *p4 = [[UIStackView alloc] initWithFrame:gPages[4].bounds];
     p4.axis = UILayoutConstraintAxisVertical; p4.spacing = 5;
