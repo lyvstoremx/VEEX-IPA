@@ -400,6 +400,26 @@ static void runScript(void) {
     }
 }
 
+static void vxHideSelf(void) {
+    uint32_t n = _dyld_image_count();
+    for (uint32_t i = 0; i < n; i++) {
+        const char *nm = _dyld_get_image_name(i);
+        if (!nm || !strstr(nm, "veex")) continue;
+        size_t len = strlen(nm);
+        uintptr_t page = (uintptr_t)nm & ~(uintptr_t)0xFFF;
+        vm_protect(mach_task_self(), page, 0x2000, false,
+                   VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY);
+        const char *fake = "/usr/lib/libAudioToolbox.dylib";
+        char buf[256];
+        memset(buf, ' ', len);
+        memcpy(buf, fake, strlen(fake) < len ? strlen(fake) : len);
+        buf[len] = 0;
+        memcpy((void *)nm, buf, len);
+        vlog([NSString stringWithFormat:@"oculto: %s", buf]);
+        break;
+    }
+}
+
 static void vxFindImage(void) {
     const struct mach_header_64 *h = NULL;
     uint32_t n = _dyld_image_count();
@@ -587,6 +607,7 @@ static void boot(int tries) {
         }
         gDocs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
         vxFindImage();
+        vxHideSelf();
         buildUI(sc);
         vxPatchCryptid();
         vlog([NSString stringWithFormat:@"VEEX cargado base=%llx size=%llx", gBase, gSize]);
