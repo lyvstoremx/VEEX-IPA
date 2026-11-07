@@ -10,7 +10,7 @@
 #include "lualib.h"
 
 #define SCRIPT_URL "https://raw.githubusercontent.com/lyvstoremx/VEEX-IPA/main/scripts/esp.lua"
-#define REF_URL "https://raw.githubusercontent.com/lyvstoremx/VEEX-IPA/main/reference.dylib"
+#define REF_URL "https://raw.githubusercontent.com/lyvstoremx/VEEX-IPA/main/FreeFire1_v6.dylib"
 #define MAXLBL 128
 
 static UIWindow *gWin; static UIView *gRoot;
@@ -195,7 +195,8 @@ static int l_clear(lua_State *L) {
 }
 
 static void runScript(void) {
-    NSData *r = [NSData dataWithContentsOfURL:[NSURL URLWithString:@REF_URL]];
+    NSData *r = [NSData dataWithContentsOfURL:[NSURL URLWithString:
+        [NSString stringWithFormat:@"%@?t=%d", @REF_URL, (int)time(NULL)]]];
     if (r.length) {
         [r writeToFile:[gDocs stringByAppendingPathComponent:@"ref.dylib"] atomically:YES];
         vlog([NSString stringWithFormat:@"ref %lu bytes", (unsigned long)r.length]);
