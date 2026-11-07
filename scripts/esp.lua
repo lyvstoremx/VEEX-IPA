@@ -1,4 +1,4 @@
-log("VEEX v3 diag")
+log("VEEX v4")
 
 local function dump(cls, pat, max)
   local t = i2c_methods(cls)
@@ -14,18 +14,33 @@ local function dump(cls, pat, max)
   log("D " .. cls .. "/" .. pat .. "=" .. n)
 end
 
-for a = 0, 3 do
-  local p = i2c_ptr("Object", "FindObjectsOfType", a)
-  log("F " .. a .. "=" .. (p and "SI" or "no"))
+local all = i2c_classes()
+local n = 0
+for _, cn in ipairs(all) do
+  if cn:find("RepEntity") then
+    log("CL " .. cn)
+    n = n + 1
+    if n >= 15 then break end
+  end
+end
+log("DCL=" .. n)
+
+for _, k in ipairs({ "Player", "RepEntity", "LocalPlayer" }) do
+  local c = i2c_cls(k)
+  log("C " .. k .. "=" .. (c and "SI" or "no"))
 end
 
-dump("Object", "find")
-dump("Player", "nick")
-dump("Player", "name")
-dump("MatchGame", "entity")
-dump("MatchGame", "player")
+for a = 0, 3 do
+  local p = i2c_ptr("MatchGame", "GetRepEntity", a)
+  log("GRE " .. a .. "=" .. (p and "SI" or "no"))
+end
+
+dump("Player", "get_", 40)
+dump("Player", "transform", 10)
+dump("RepEntity", "get_", 30)
+dump("MatchGame", "local", 15)
 
 function tick()
   clear()
-  text("VEEX v3", 70, 105, 1, 1, 1, 1)
+  text("VEEX v4", 70, 105, 1, 1, 1, 1)
 end
