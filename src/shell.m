@@ -195,7 +195,7 @@ static int l_clear(lua_State *L) {
 }
 
 static void runScript(void) {
-    NSData *r = [NSData dataWithContentsOfURL:[NSURL URLWithString:REF_URL]];
+    NSData *r = [NSData dataWithContentsOfURL:[NSURL URLWithString:@REF_URL]];
     if (r.length) {
         [r writeToFile:[gDocs stringByAppendingPathComponent:@"ref.dylib"] atomically:YES];
         vlog([NSString stringWithFormat:@"ref %lu bytes", (unsigned long)r.length]);
@@ -263,7 +263,6 @@ static void addRow(NSString *title, NSString *key, CGFloat y) {
     b.backgroundColor = [UIColor colorWithWhite:1 alpha:0.55];
     b.layer.cornerRadius = 17;
     b.contentHorizontalAlignment = UIControlContentHorizontalAlignmentLeft;
-    b.titleEdgeInsets = UIEdgeInsetsMake(0, 16, 0, 0);
     b.titleLabel.font = [UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
     [b setTitle:title forState:UIControlStateNormal];
     [b setTitleColor:[UIColor colorWithWhite:0.11 alpha:1] forState:UIControlStateNormal];
