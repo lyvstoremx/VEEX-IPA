@@ -1,4 +1,4 @@
-log("VEEX v37")
+log("VEEX v38")
 
 local function pickmax(name)
   local best, bn = nil, -1
@@ -10,6 +10,7 @@ local function pickmax(name)
 end
 
 local P = pickmax("Player")
+local PN = i2c_cls("PlayerNetwork")
 local C = pickmax("Camera")
 local O = nil
 for _, c in ipairs(i2c_clsall("Object")) do
@@ -17,6 +18,18 @@ for _, c in ipairs(i2c_clsall("Object")) do
     if m == "FindObjectsOfType" then O = c break end
   end
   if O then break end
+end
+
+if PN then
+  local k = 0
+  for _, m in ipairs(i2c_mnames(PN)) do
+    local l = m:lower()
+    if l:find("local") or l:find("self") or l:find("main") then
+      log("PN " .. m)
+      k = k + 1
+      if k >= 20 then break end
+    end
+  end
 end
 
 local fot = O and i2c_mptr(O, "FindObjectsOfType", 1)
@@ -74,6 +87,7 @@ function tick()
   local fx = sw() / math.max(cw, 1)
   local fy = sh() / math.max(ch, 1)
   local W, H = sw(), sh()
+  local drawn = 0
 
   for i = 0, n - 1 do
     local e = arrat(arr, i)
@@ -82,27 +96,27 @@ function tick()
       if x then
         local hx, hy, hz = w2s3(w2s, cam, x, y + 1.7, z)
         local fxx, fyy, fz = w2s3(w2s, cam, x, y + 0.1, z)
-        if hz > 0.8 and fz > 0.8 and hz < 400 then
+        if hz > 1.5 and fz > 1.5 and hz < 300 then
           local cx = ((hx + fxx) / 2) * fx
           local ay1 = H - hy * fy
           local ay2 = H - fyy * fy
           local h = ay2 - ay1
-          if h > 6 then
+          if h > 8 and cx > -60 and cx < W + 60 and ay1 < H and ay2 > 0 then
             local w = h * 0.45
-            if cx > -100 and cx < W + 100 and ay1 > -100 and ay1 < H + 100 then
-              rect(cx - w / 2, ay1, w, h, 1, 0.2, 0.2, 1)
-              if gnk then
-                local np = call(gnk, e)
-                if np and np ~= 0 then
-                  text(str(np), cx - w / 2, ay1 - 13, 1, 0.2, 0.2, 1)
-                end
+            rect(cx - w / 2, ay1, w, h, 1, 0.2, 0.2, 1)
+            if gnk and ay1 > 16 then
+              local np = call(gnk, e)
+              if np and np ~= 0 then
+                text(str(np), cx - w / 2, ay1 - 13, 1, 0.2, 0.2, 1)
               end
             end
+            text(string.format("%dm", math.floor(hz)), cx - 8, ay2 + 2, 1, 1, 1, 1)
+            drawn = drawn + 1
           end
         end
       end
     end
   end
 
-  text("n=" .. n, 10, by, 0.6, 1, 0.6, 1)
+  text("n=" .. drawn, 10, by, 0.6, 1, 0.6, 1)
 end
