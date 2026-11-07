@@ -19,6 +19,8 @@ static lua_State *gL; static NSString *gDocs;
 static CGRect gBtnR, gPanelR; static int gOpen;
 static NSString *gIDFV;
 
+static void vxResetGuest(void);
+
 static void vlog(NSString *s) {
     dispatch_async(dispatch_get_main_queue(), ^{
         gLogView.text = [gLogView.text stringByAppendingFormat:@"%@\n", s];
@@ -80,6 +82,12 @@ static void vxResetGuest(void) {
                    dispatch_get_main_queue(), ^{ exit(0); });
 }
 
+@interface UIButton (VX) @end
+@implementation UIButton (VX)
+- (void)vxDoTap { gOpen = !gOpen; gPanel.hidden = !gOpen; }
+- (void)vxDoReset { vxResetGuest(); }
+@end
+
 static int l_log(lua_State *L) { vlog([NSString stringWithUTF8String:luaL_checkstring(L,1)]); return 0; }
 static int l_sleep(lua_State *L) { usleep((useconds_t)(luaL_checknumber(L,1)*1000)); return 0; }
 
@@ -119,8 +127,6 @@ static void runScript(void) {
     }
 }
 
-static void vxTap(void) { gOpen = !gOpen; gPanel.hidden = !gOpen; }
-
 static void buildUI(UIWindowScene *sc) {
     gWin = [[UIWindow alloc] initWithWindowScene:sc];
     gWin.frame = sc.coordinateSpace.bounds;
@@ -141,7 +147,7 @@ static void buildUI(UIWindowScene *sc) {
     gBtn.titleLabel.font = [UIFont boldSystemFontOfSize:16];
     [gBtn setTitle:@"VX" forState:UIControlStateNormal];
     [gBtn setTitleColor:[UIColor colorWithWhite:0.1 alpha:1] forState:UIControlStateNormal];
-    [gBtn addTarget:gBtn action:@selector(vxTap) forControlEvents:UIControlEventTouchUpInside];
+    [gBtn addTarget:gBtn action:@selector(vxDoTap) forControlEvents:UIControlEventTouchUpInside];
     [gRoot addSubview:gBtn];
 
     gPanelR = CGRectMake(14, 124, 340, 330);
@@ -162,7 +168,7 @@ static void buildUI(UIWindowScene *sc) {
     rst.titleLabel.font = [UIFont boldSystemFontOfSize:12];
     [rst setTitle:@"RESET GUEST" forState:UIControlStateNormal];
     [rst setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
-    [rst addTarget:rst action:@selector(vxResetGuest) forControlEvents:UIControlEventTouchUpInside];
+    [rst addTarget:rst action:@selector(vxDoReset) forControlEvents:UIControlEventTouchUpInside];
     [gPanel addSubview:rst];
 
     gLogView = [[UITextView alloc] initWithFrame:CGRectMake(12, 80, 316, 238)];
