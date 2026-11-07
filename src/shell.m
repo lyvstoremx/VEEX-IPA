@@ -16,13 +16,11 @@
 #include "lauxlib.h"
 #include "lualib.h"
 
-// ======== ESCALON DE PRUEBA ========
 #define VX_STAGE 1
-#define VX_FPS 30
+#define VX_FPS 20
 
 #define SCRIPT_API @"https://api.github.com/repos/lyvstoremx/VEEX-IPA/contents/scripts/esp.lua"
 #define SCRIPT_RAW @"https://raw.githubusercontent.com/lyvstoremx/VEEX-IPA/main/scripts/esp.lua"
-#define REF_URL    @"https://raw.githubusercontent.com/lyvstoremx/VEEX-IPA/main/src/shell.m"
 
 extern int csops(pid_t pid, unsigned int ops, void *useraddr, size_t usersize);
 #define VX_CS_OPS_STATUS 0
@@ -33,6 +31,10 @@ extern int csops(pid_t pid, unsigned int ops, void *useraddr, size_t usersize);
 static NSMutableString *gLog = nil;
 static UITextView *gLogView = nil;
 
+static NSString *vxLogPath(void) {
+    return [NSHomeDirectory() stringByAppendingPathComponent:@"Documents/veex.log"];
+}
+
 static void vxLog(NSString *fmt, ...) {
     va_list ap; va_start(ap, fmt);
     NSString *s = [[NSString alloc] initWithFormat:fmt arguments:ap];
@@ -40,6 +42,21 @@ static void vxLog(NSString *fmt, ...) {
     if (!gLog) gLog = [NSMutableString new];
     [gLog appendFormat:@"%@\n", s];
     if (gLog.length > 12000) [gLog deleteCharactersInRange:NSMakeRange(0, gLog.length - 12000)];
+
+    NSString *line = [s stringByAppendingString:@"\n"];
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+        NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:vxLogPath()];
+        if (!fh) {
+            [[NSData data] writeToFile:vxLogPath() atomically:YES];
+            fh = [NSFileHandle fileHandleForWritingAtPath:vxLogPath()];
+        }
+        if (fh) {
+            @try { [fh seekToEndOfFile]; [fh writeData:[line dataUsingEncoding:NSUTF8StringEncoding]]; }
+            @catch (NSException *e) {}
+            [fh closeFile];
+        }
+    });
+
     dispatch_async(dispatch_get_main_queue(), ^{
         if (gLogView) {
             gLogView.text = gLog;
@@ -144,6 +161,7 @@ static UIView *gFabRef(void) { return gFab; }
 - (void)vxDoTap;
 - (void)vxDoTab;
 - (void)vxDoCopy;
+- (void)vxDoClear;
 - (void)vxDoReset;
 - (void)vxDoRun;
 - (void)vxDoClose;
@@ -165,6 +183,11 @@ static void vxAttach(void);
 - (void)vxDoCopy {
     [UIPasteboard generalPasteboard].string = gLog ?: @"";
     vxLog(@"[VEEX] log copiado");
+}
+- (void)vxDoClear {
+    [gLog setString:@""];
+    [[NSData data] writeToFile:vxLogPath() atomically:YES];
+    if (gLogView) gLogView.text = @"";
 }
 - (void)vxDoReset {
     vxLog(@"[VEEX] RESET GUEST...");
@@ -807,10 +830,18 @@ static void vxAttach(void) {
 static void buildUI(void) {
     if (gPanel) return;
 
+    gLog = [NSMutableString new];
+    NSString *prev = [NSString stringWithContentsOfFile:vxLogPath() encoding:NSUTF8StringEncoding error:nil];
+    if (prev.length) {
+        if (prev.length > 9000) prev = [prev substringFromIndex:prev.length - 9000];
+        [gLog appendString:@"--- anterior ---\n"];
+        [gLog appendString:prev];
+    }
+
     gRoot = [[VXRoot alloc] initWithFrame:CGRectMake(0, 0, 320, 568)];
     gRoot.backgroundColor = [UIColor clearColor];
     vxAttach();
-    if (!gRoot.superview) { vxLog(@"[VEEX] sin ventana host"); return; }
+    if (!gRoot.superview) return;
 
     [NSTimer scheduledTimerWithTimeInterval:1.0 repeats:YES block:^(NSTimer *tm) {
         vxAttach();
@@ -910,7 +941,6 @@ static void buildUI(void) {
     [p0 addArrangedSubview:vxRow(@"Línea",      vxSw(@"line", YES))];
     [p0 addArrangedSubview:vxRow(@"Nombre",     vxSw(@"name", YES))];
     [p0 addArrangedSubview:vxRow(@"Distancia",  vxSw(@"dist", YES))];
-    [p0 addArrangedSubview:vxRow(@"Salud",      vxSw(@"hp", YES))];
 
     UIStackView *p1 = [[UIStackView alloc] initWithFrame:gPages[1].bounds];
     p1.axis = UILayoutConstraintAxisVertical; p1.spacing = 5;
@@ -939,17 +969,19 @@ static void buildUI(void) {
     gLogView.editable = NO;
     gLogView.layer.cornerRadius = 8;
     [content addSubview:gLogView];
+    gLogView.text = gLog;
 
-    NSArray *acts = @[@"COPIAR", @"RUN", @"RESET", @"CERRAR"];
-    SEL sels[4] = { @selector(vxDoCopy), @selector(vxDoRun), @selector(vxDoReset), @selector(vxDoClose) };
+    NSArray *acts = @[@"COPIAR", @"LIMPIAR", @"RUN", @"RESET", @"CERRAR"];
+    SEL sels[5] = { @selector(vxDoCopy), @selector(vxDoClear), @selector(vxDoRun),
+                    @selector(vxDoReset), @selector(vxDoClose) };
     UIStackView *foot = [[UIStackView alloc] initWithFrame:CGRectMake(12, 408, 276, 32)];
     foot.distribution = UIStackViewDistributionFillEqually;
-    foot.spacing = 6;
+    foot.spacing = 5;
     [content addSubview:foot];
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < 5; i++) {
         UIButton *b = [UIButton buttonWithType:UIButtonTypeCustom];
         [b setTitle:acts[i] forState:UIControlStateNormal];
-        b.titleLabel.font = [UIFont systemFontOfSize:10 weight:UIFontWeightBold];
+        b.titleLabel.font = [UIFont systemFontOfSize:9 weight:UIFontWeightBold];
         b.backgroundColor = [UIColor colorWithWhite:1 alpha:0.12];
         b.layer.cornerRadius = 8;
         [b addTarget:b action:sels[i] forControlEvents:UIControlEventTouchUpInside];
