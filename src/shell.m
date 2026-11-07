@@ -279,6 +279,8 @@ static void *(*p_class_get_methods)(void *, void **) = NULL;
 static void *(*p_runtime_invoke)(void *, void *, void **, void **) = NULL;
 static void (*p_runtime_class_init)(void *) = NULL;
 static void *(*p_thread_attach)(void *) = NULL;
+static void *(*p_class_get_type)(void *) = NULL;
+static void *(*p_type_get_object)(void *) = NULL;
 
 static void vxLoadIL2CPP(void) {
     if (gUF) return;
@@ -297,10 +299,11 @@ static void vxLoadIL2CPP(void) {
     p_runtime_invoke             = dlsym(gUF, "il2cpp_runtime_invoke");
     p_runtime_class_init         = dlsym(gUF, "il2cpp_runtime_class_init");
     p_thread_attach              = dlsym(gUF, "il2cpp_thread_attach");
-    vxLog(@"[VEEX] il2cpp %s init=%s attach=%s",
+    p_class_get_type             = dlsym(gUF, "il2cpp_class_get_type");
+    p_type_get_object            = dlsym(gUF, "il2cpp_type_get_object");
+    vxLog(@"[VEEX] il2cpp %s type=%s",
           p_runtime_invoke ? "OK" : "PARCIAL",
-          p_runtime_class_init ? "si" : "no",
-          p_thread_attach ? "si" : "no");
+          (p_class_get_type && p_type_get_object) ? "si" : "no");
 }
 
 static void vxInitClass(void *c) {
@@ -392,6 +395,14 @@ static int l_str(lua_State *S) {
 static int l_clsinit(lua_State *S) {
     vxInitClass(VXP(lua_tointeger(S, 1)));
     return 0;
+}
+static int l_clstype(lua_State *S) {
+    void *c = VXP(lua_tointeger(S, 1));
+    vxInitClass(c);
+    void *t = (c && p_class_get_type) ? p_class_get_type(c) : NULL;
+    void *o = (t && p_type_get_object) ? p_type_get_object(t) : NULL;
+    if (o) lua_pushinteger(S, (lua_Integer)(uintptr_t)o); else lua_pushnil(S);
+    return 1;
 }
 
 static int l_i2c_cls(lua_State *S) {
@@ -603,6 +614,7 @@ static void vxReg(lua_State *S) {
     lua_register(S, "str", l_str);
     lua_register(S, "scan", l_scan);
     lua_register(S, "clsinit", l_clsinit);
+    lua_register(S, "clstype", l_clstype);
     lua_register(S, "i2c_cls", l_i2c_cls);
     lua_register(S, "i2c_classes", l_i2c_classes);
     lua_register(S, "i2c_methods", l_i2c_methods);
