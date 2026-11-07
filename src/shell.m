@@ -427,6 +427,57 @@ static int l_i2c_ptr(lua_State *S) {
     if (m) lua_pushinteger(S, (lua_Integer)(uintptr_t)m); else lua_pushnil(S);
     return 1;
 }
+
+static int l_i2c_clsall(lua_State *S) {
+    const char *n = lua_tostring(S, 1);
+    lua_newtable(S);
+    if (!n || !p_domain_get || !p_class_get_name) return 1;
+    size_t cnt = 0; int idx = 1;
+    void **as = p_domain_get_assemblies(p_domain_get(), &cnt);
+    for (size_t i = 0; i < cnt; i++) {
+        void *img = p_assembly_get_image(as[i]);
+        if (!img) continue;
+        size_t cc = p_image_get_class_count(img);
+        for (size_t j = 0; j < cc; j++) {
+            void *c = p_image_get_class(img, j);
+            const char *cn = p_class_get_name(c);
+            if (cn && !strcmp(cn, n)) {
+                lua_pushinteger(S, (lua_Integer)(uintptr_t)c);
+                lua_rawseti(S, -2, idx++);
+                if (idx > 50) return 1;
+            }
+        }
+    }
+    return 1;
+}
+static int l_i2c_cname(lua_State *S) {
+    void *c = VXP(lua_tointeger(S, 1));
+    const char *n = (c && p_class_get_name) ? p_class_get_name(c) : NULL;
+    lua_pushstring(S, n ? n : "?");
+    return 1;
+}
+static int l_i2c_mnames(lua_State *S) {
+    void *c = VXP(lua_tointeger(S, 1));
+    lua_newtable(S);
+    if (!c || !p_class_get_methods || !p_method_get_name) return 1;
+    void *it = NULL;
+    void *m = NULL;
+    int idx = 1;
+    while ((m = p_class_get_methods(c, &it)) != NULL && idx < 400) {
+        const char *mn = p_method_get_name(m);
+        if (mn) { lua_pushstring(S, mn); lua_rawseti(S, -2, idx++); }
+    }
+    return 1;
+}
+static int l_i2c_mptr(lua_State *S) {
+    void *c = VXP(lua_tointeger(S, 1));
+    const char *mn = lua_tostring(S, 2);
+    int argc = (int)lua_tointeger(S, 3);
+    void *m = (c && p_class_get_method_from_name) ? p_class_get_method_from_name(c, mn, argc) : NULL;
+    if (m) lua_pushinteger(S, (lua_Integer)(uintptr_t)m); else lua_pushnil(S);
+    return 1;
+}
+
 static int l_call(lua_State *S) {
     void *m = VXP(lua_tointeger(S,1)), *o = VXP(lua_tointeger(S,2)), *exc = NULL;
     void *r = p_runtime_invoke(m, o, NULL, &exc);
@@ -536,6 +587,10 @@ static void vxReg(lua_State *S) {
     lua_register(S, "i2c_classes", l_i2c_classes);
     lua_register(S, "i2c_methods", l_i2c_methods);
     lua_register(S, "i2c_ptr", l_i2c_ptr);
+    lua_register(S, "i2c_clsall", l_i2c_clsall);
+    lua_register(S, "i2c_cname", l_i2c_cname);
+    lua_register(S, "i2c_mnames", l_i2c_mnames);
+    lua_register(S, "i2c_mptr", l_i2c_mptr);
     lua_register(S, "call", l_call);
     lua_register(S, "callv", l_callv);
     lua_register(S, "callv3", l_callv3);
@@ -770,7 +825,7 @@ static void buildUI(void) {
     [p2 addArrangedSubview:vxRow(@"Snapline",   vxSw(@"snap", NO))];
 
     UIStackView *p3 = [[UIStackView alloc] initWithFrame:gPages[3].bounds];
-    p3.axis = UILayoutConstraintAxisVertical; p3.spacing = 5;
+    p3.axis = UILayoutConstraintAxisVertical; p3.spacing = 6;
     [gPages[3] addSubview:p3];
     [p3 addArrangedSubview:vxRow(@"Sin retroceso",  vxSw(@"norecoil", NO))];
     [p3 addArrangedSubview:vxRow(@"Sin dispersión", vxSw(@"nospread", NO))];
@@ -825,6 +880,7 @@ __attribute__((constructor)) static void vxInit(void) {
                 if (!gBase) [NSThread sleepForTimeInterval:0.5];
             }
             if (!gBase && p_domain_get) {
+                DlInfo_unused:;
                 Dl_info di;
                 if (dladdr((void *)p_domain_get, &di) && di.dli_fbase)
                     vxSetBase((const struct mach_header_64 *)di.dli_fbase);
