@@ -167,7 +167,6 @@ static void vxAttach(void);
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         NSDictionary *q = @{ (__bridge id)kSecClass : (__bridge id)kSecClassGenericPassword };
         OSStatus st = SecItemDelete((__bridge CFDictionaryRef)q);
-
         NSFileManager *fm = [NSFileManager defaultManager];
         NSString *pref = [NSHomeDirectory() stringByAppendingPathComponent:@"Library/Preferences"];
         for (NSString *f in [fm contentsOfDirectoryAtPath:pref error:nil]) {
@@ -316,9 +315,7 @@ static void vxLoadIL2CPP(void) {
     p_thread_attach              = dlsym(gUF, "il2cpp_thread_attach");
     p_class_get_type             = dlsym(gUF, "il2cpp_class_get_type");
     p_type_get_object            = dlsym(gUF, "il2cpp_type_get_object");
-    vxLog(@"[VEEX] il2cpp %s type=%s",
-          p_runtime_invoke ? "OK" : "PARCIAL",
-          (p_class_get_type && p_type_get_object) ? "si" : "no");
+    vxLog(@"[VEEX] il2cpp %s", p_runtime_invoke ? "OK" : "PARCIAL");
 }
 
 static void vxInitClass(void *c) {
@@ -343,6 +340,8 @@ static void *vxFindClass(const char *name) {
 }
 
 #define VXP(x) ((void *)(uintptr_t)(x))
+
+typedef struct { float x, y, z; } VXVec3;
 
 // ============ LUA ============
 static lua_State *L = NULL;
@@ -384,18 +383,10 @@ static int l_rv3(lua_State *S) {
     lua_pushnumber(S, p[2]);
     return 3;
 }
-static int l_sc(lua_State *S) {
-    lua_pushnumber(S, [UIScreen mainScreen].scale);
-    return 1;
-}
-static int l_sw(lua_State *S) {
-    lua_pushnumber(S, [UIScreen mainScreen].bounds.size.width);
-    return 1;
-}
-static int l_sh(lua_State *S) {
-    lua_pushnumber(S, [UIScreen mainScreen].bounds.size.height);
-    return 1;
-}
+static int l_sc(lua_State *S) { lua_pushnumber(S, [UIScreen mainScreen].scale); return 1; }
+static int l_sw(lua_State *S) { lua_pushnumber(S, [UIScreen mainScreen].bounds.size.width); return 1; }
+static int l_sh(lua_State *S) { lua_pushnumber(S, [UIScreen mainScreen].bounds.size.height); return 1; }
+
 static int l_str(lua_State *S) {
     void *p = VXP(lua_tointeger(S, 1));
     if (!p) { lua_pushstring(S, ""); return 1; }
@@ -415,10 +406,41 @@ static int l_str(lua_State *S) {
     return 1;
 }
 
-static int l_clsinit(lua_State *S) {
-    vxInitClass(VXP(lua_tointeger(S, 1)));
-    return 0;
+static int l_pos3(lua_State *S) {
+    void *m = VXP(lua_tointeger(S, 1));
+    void *o = VXP(lua_tointeger(S, 2));
+    VXVec3 r = {0, 0, 0};
+    if (m) { VXVec3 (*fn)(void *) = (VXVec3 (*)(void *))m; r = fn(o); }
+    lua_pushnumber(S, r.x); lua_pushnumber(S, r.y); lua_pushnumber(S, r.z);
+    return 3;
 }
+static int l_w2s3(lua_State *S) {
+    void *m = VXP(lua_tointeger(S, 1));
+    void *o = VXP(lua_tointeger(S, 2));
+    float x = (float)lua_tonumber(S, 3), y = (float)lua_tonumber(S, 4), z = (float)lua_tonumber(S, 5);
+    VXVec3 r = {0, 0, 0};
+    if (m) { VXVec3 (*fn)(void *, float, float, float) = (VXVec3 (*)(void *, float, float, float))m; r = fn(o, x, y, z); }
+    lua_pushnumber(S, r.x); lua_pushnumber(S, r.y); lua_pushnumber(S, r.z);
+    return 3;
+}
+static int l_calli(lua_State *S) {
+    void *m = VXP(lua_tointeger(S, 1));
+    void *o = VXP(lua_tointeger(S, 2));
+    int r = 0;
+    if (m) { int (*fn)(void *) = (int (*)(void *))m; r = fn(o); }
+    lua_pushinteger(S, r);
+    return 1;
+}
+static int l_callf(lua_State *S) {
+    void *m = VXP(lua_tointeger(S, 1));
+    void *o = VXP(lua_tointeger(S, 2));
+    float r = 0;
+    if (m) { float (*fn)(void *) = (float (*)(void *))m; r = fn(o); }
+    lua_pushnumber(S, r);
+    return 1;
+}
+
+static int l_clsinit(lua_State *S) { vxInitClass(VXP(lua_tointeger(S, 1))); return 0; }
 static int l_clstype(lua_State *S) {
     void *c = VXP(lua_tointeger(S, 1));
     vxInitClass(c);
@@ -458,9 +480,7 @@ static int l_i2c_methods(lua_State *S) {
     void *c = n ? vxFindClass(n) : NULL;
     lua_newtable(S);
     if (!c || !p_class_get_methods || !p_method_get_name) return 1;
-    void *iter = NULL;
-    void *m = NULL;
-    int idx = 1;
+    void *iter = NULL; void *m = NULL; int idx = 1;
     while ((m = p_class_get_methods(c, &iter)) != NULL && idx < 8000) {
         const char *mn = p_method_get_name(m);
         if (mn) { lua_pushstring(S, mn); lua_rawseti(S, -2, idx++); }
@@ -478,7 +498,6 @@ static int l_i2c_ptr(lua_State *S) {
     if (m) lua_pushinteger(S, (lua_Integer)(uintptr_t)m); else lua_pushnil(S);
     return 1;
 }
-
 static int l_i2c_clsall(lua_State *S) {
     const char *n = lua_tostring(S, 1);
     lua_newtable(S);
@@ -511,9 +530,7 @@ static int l_i2c_mnames(lua_State *S) {
     void *c = VXP(lua_tointeger(S, 1));
     lua_newtable(S);
     if (!c || !p_class_get_methods || !p_method_get_name) return 1;
-    void *it = NULL;
-    void *m = NULL;
-    int idx = 1;
+    void *it = NULL; void *m = NULL; int idx = 1;
     while ((m = p_class_get_methods(c, &it)) != NULL && idx < 400) {
         const char *mn = p_method_get_name(m);
         if (mn) { lua_pushstring(S, mn); lua_rawseti(S, -2, idx++); }
@@ -638,6 +655,10 @@ static void vxReg(lua_State *S) {
     lua_register(S, "sh", l_sh);
     lua_register(S, "str", l_str);
     lua_register(S, "scan", l_scan);
+    lua_register(S, "pos3", l_pos3);
+    lua_register(S, "w2s3", l_w2s3);
+    lua_register(S, "calli", l_calli);
+    lua_register(S, "callf", l_callf);
     lua_register(S, "clsinit", l_clsinit);
     lua_register(S, "clstype", l_clstype);
     lua_register(S, "i2c_cls", l_i2c_cls);
