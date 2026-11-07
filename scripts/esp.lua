@@ -1,4 +1,4 @@
-log("VEEX v44")
+log("VEEX v45")
 
 local function pickmax(name)
   local best, bn = nil, -1
@@ -22,9 +22,6 @@ end
 
 local gpid = G and i2c_mptr(G, "CurrentLocalPlayerID", 0)
 local gid = P and (i2c_mptr(P, "get_PlayerID", 0) or i2c_mptr(P, "get_PlayerId", 0))
-local ghp = P and (i2c_mptr(P, "get_HP", 0) or i2c_mptr(P, "get_Hp", 0)
-  or i2c_mptr(P, "get_Health", 0) or i2c_mptr(P, "get_CurHP", 0))
-log("hp=" .. tostring(ghp))
 
 local fot = O and i2c_mptr(O, "FindObjectsOfType", 1)
 local gtr = P and i2c_mptr(P, "get_transform", 0)
@@ -99,17 +96,12 @@ local function update()
             local ay2 = H - fyy * fy
             local h = ay2 - ay1
             if h > 8 and cx > 0 and cx < W and ay1 > 0 and ay1 < H then
-              local nm, hp = nil, nil
+              local nm = nil
               if gnk and hz < 120 then
                 local np = call(gnk, e)
                 if np and np ~= 0 then nm = str(np) end
               end
-              if ghp then
-                hp = callf(ghp, e)
-                if hp and hp > 100 then hp = 100 end
-                if hp and hp < 0 then hp = 0 end
-              end
-              boxes[#boxes + 1] = { cx = cx, y1 = ay1, h = h, d = hz, nm = nm, hp = hp }
+              boxes[#boxes + 1] = { cx = cx, y1 = ay1, h = h, d = hz, nm = nm }
               count = count + 1
             end
           end
@@ -132,10 +124,6 @@ function tick()
     local w = b.h * 0.45
     if get("line") then line(W / 2, 0, b.cx, b.y1, 1, 1, 1, 0.5) end
     if get("box") then rect(b.cx - w / 2, b.y1, w, b.h, 1, 0.2, 0.2, 1) end
-    if b.hp and get("hp") then
-      local hh = b.h * (b.hp / 100)
-      fill(b.cx - w / 2 - 5, b.y1 + (b.h - hh), 3, hh, 0.2, 1, 0.3, 1)
-    end
     if b.nm and get("name") and b.y1 > 18 then
       text(b.nm, b.cx - w / 2, b.y1 - 13, 1, 0.2, 0.2, 1)
     end
