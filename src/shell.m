@@ -607,9 +607,7 @@ static void boot(int tries) {
         }
         gDocs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
         vxFindImage();
-        vxHideSelf();
         buildUI(sc);
-        vxPatchCryptid();
         vlog([NSString stringWithFormat:@"VEEX cargado base=%llx size=%llx", gBase, gSize]);
         dispatch_async(dispatch_get_global_queue(0,0), ^{ runScript(); });
     });
