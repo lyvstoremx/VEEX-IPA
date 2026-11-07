@@ -92,6 +92,36 @@ static void vxLog(NSString *fmt, ...) {
 }
 @end
 
+// ============ ARRASTRE ============
+@interface VXPan : NSObject
+@end
+
+static UIWindow *gWin = nil;
+static VXRoot *gRoot = nil;
+static UIView *gPanel = nil;
+static VXCanvas *gCanvas = nil;
+static UIView *gPages[5];
+static NSMutableDictionary *gSw = nil;
+static VXPan *gPan = nil;
+static int gTab = 0;
+
+@implementation VXPan
+- (void)handle:(UIPanGestureRecognizer *)g {
+    if (!gPanel) return;
+    CGPoint d = [g translationInView:gRoot];
+    CGRect f = gPanel.frame;
+    f.origin.x += d.x;
+    f.origin.y += d.y;
+    CGSize s = gRoot.bounds.size;
+    if (f.origin.x < 0) f.origin.x = 0;
+    if (f.origin.y < 0) f.origin.y = 0;
+    if (f.origin.x + f.size.width > s.width) f.origin.x = s.width - f.size.width;
+    if (f.origin.y + f.size.height > s.height) f.origin.y = s.height - f.size.height;
+    gPanel.frame = f;
+    [g setTranslation:CGPointZero inView:gRoot];
+}
+@end
+
 // ============ BOTONES ============
 @interface UIButton (VX)
 - (void)vxDoTap;
@@ -101,14 +131,6 @@ static void vxLog(NSString *fmt, ...) {
 - (void)vxDoRun;
 - (void)vxDoClose;
 @end
-
-static UIWindow *gWin = nil;
-static VXRoot *gRoot = nil;
-static UIView *gPanel = nil;
-static VXCanvas *gCanvas = nil;
-static UIView *gPages[5];
-static NSMutableDictionary *gSw = nil;
-static int gTab = 0;
 
 static void buildUI(void);
 static void vxMakeWindow(void);
@@ -184,14 +206,13 @@ static UIView *vxRow(NSString *title, UIView *ctl) {
         [l.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
         [ctl.trailingAnchor constraintEqualToAnchor:row.trailingAnchor constant:-10],
         [ctl.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
-        [row.heightAnchor constraintEqualToConstant:38],
+        [row.heightAnchor constraintEqualToConstant:34],
     ]];
     return row;
 }
 static UIView *vxPage(void) {
     UIView *p = [UIView new];
     p.hidden = YES;
-    p.translatesAutoresizingMaskIntoConstraints = NO;
     return p;
 }
 
@@ -620,7 +641,8 @@ static void buildUI(void) {
     [gRoot addSubview:fab];
 
     CGSize scr = gRoot.bounds.size;
-    gPanel = [[UIView alloc] initWithFrame:CGRectMake((scr.width - 300) / 2, 60, 300, 452)];
+    CGFloat ph = MIN(452.0, scr.height - 90.0);
+    gPanel = [[UIView alloc] initWithFrame:CGRectMake((scr.width - 300) / 2, 50, 300, ph)];
     gPanel.hidden = YES;
     gPanel.layer.cornerRadius = 20;
     gPanel.clipsToBounds = YES;
@@ -632,26 +654,39 @@ static void buildUI(void) {
     blur.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     [gPanel addSubview:blur];
 
-    UIView *content = [UIView new];
-    content.frame = gPanel.bounds;
-    [gPanel addSubview:content];
+    UIScrollView *sv = [[UIScrollView alloc] initWithFrame:gPanel.bounds];
+    sv.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    sv.contentSize = CGSizeMake(300, 452);
+    sv.showsVerticalScrollIndicator = NO;
+    sv.alwaysBounceVertical = YES;
+    [gPanel addSubview:sv];
+
+    UIView *content = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 300, 452)];
+    [sv addSubview:content];
+
+    UIView *head = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 300, 40)];
+    head.backgroundColor = [UIColor clearColor];
+    [content addSubview:head];
+    if (!gPan) gPan = [VXPan new];
+    UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:gPan action:@selector(handle:)];
+    [head addGestureRecognizer:pan];
 
     UILabel *title = [UILabel new];
     title.text = @"VEEX";
     title.textColor = [UIColor whiteColor];
     title.font = [UIFont systemFontOfSize:19 weight:UIFontWeightHeavy];
-    title.frame = CGRectMake(16, 12, 100, 24);
-    [content addSubview:title];
+    title.frame = CGRectMake(16, 8, 120, 24);
+    [head addSubview:title];
 
     UIButton *x = [UIButton buttonWithType:UIButtonTypeCustom];
-    x.frame = CGRectMake(258, 10, 30, 30);
+    x.frame = CGRectMake(258, 6, 30, 30);
     [x setTitle:@"✕" forState:UIControlStateNormal];
     [x setTitleColor:[UIColor colorWithWhite:1 alpha:0.7] forState:UIControlStateNormal];
     [x addTarget:x action:@selector(vxDoClose) forControlEvents:UIControlEventTouchUpInside];
-    [content addSubview:x];
+    [head addSubview:x];
 
     NSArray *names = @[@"ESP", @"AIM", @"DRAW", @"MISC", @"SET"];
-    UIStackView *tabs = [[UIStackView alloc] initWithFrame:CGRectMake(12, 42, 276, 30)];
+    UIStackView *tabs = [[UIStackView alloc] initWithFrame:CGRectMake(12, 44, 276, 30)];
     tabs.distribution = UIStackViewDistributionFillEqually;
     tabs.spacing = 6;
     [content addSubview:tabs];
@@ -666,7 +701,7 @@ static void buildUI(void) {
         [tabs addArrangedSubview:b];
     }
 
-    UIView *holder = [[UIView alloc] initWithFrame:CGRectMake(12, 80, 276, 240)];
+    UIView *holder = [[UIView alloc] initWithFrame:CGRectMake(12, 82, 276, 236)];
     [content addSubview:holder];
     for (int i = 0; i < 5; i++) {
         gPages[i] = vxPage();
@@ -676,7 +711,7 @@ static void buildUI(void) {
     gPages[0].hidden = NO;
 
     UIStackView *p0 = [[UIStackView alloc] initWithFrame:gPages[0].bounds];
-    p0.axis = UILayoutConstraintAxisVertical; p0.spacing = 6;
+    p0.axis = UILayoutConstraintAxisVertical; p0.spacing = 5;
     [gPages[0] addSubview:p0];
     [p0 addArrangedSubview:vxRow(@"ESP activo", vxSw(@"esp", YES))];
     [p0 addArrangedSubview:vxRow(@"Cajas",      vxSw(@"box", YES))];
@@ -686,7 +721,7 @@ static void buildUI(void) {
     [p0 addArrangedSubview:vxRow(@"Salud",      vxSw(@"hp", YES))];
 
     UIStackView *p1 = [[UIStackView alloc] initWithFrame:gPages[1].bounds];
-    p1.axis = UILayoutConstraintAxisVertical; p1.spacing = 6;
+    p1.axis = UILayoutConstraintAxisVertical; p1.spacing = 5;
     [gPages[1] addSubview:p1];
     [p1 addArrangedSubview:vxRow(@"Aimbot",     vxSw(@"aim", NO))];
     [p1 addArrangedSubview:vxRow(@"Silencioso", vxSw(@"aimsilent", YES))];
@@ -695,23 +730,23 @@ static void buildUI(void) {
     [p1 addArrangedSubview:vxRow(@"Cabeza",     vxSw(@"aimhead", YES))];
 
     UIStackView *p2 = [[UIStackView alloc] initWithFrame:gPages[2].bounds];
-    p2.axis = UILayoutConstraintAxisVertical; p2.spacing = 6;
+    p2.axis = UILayoutConstraintAxisVertical; p2.spacing = 5;
     [gPages[2] addSubview:p2];
     [p2 addArrangedSubview:vxRow(@"Grosor 1.5", vxSw(@"thick", YES))];
     [p2 addArrangedSubview:vxRow(@"Esqueleto",  vxSw(@"skel", NO))];
     [p2 addArrangedSubview:vxRow(@"Snapline",   vxSw(@"snap", NO))];
 
     UIStackView *p3 = [[UIStackView alloc] initWithFrame:gPages[3].bounds];
-    p3.axis = UILayoutConstraintAxisVertical; p3.spacing = 6;
+    p3.axis = UILayoutConstraintAxisVertical; p3.spacing = 5;
     [gPages[3] addSubview:p3];
     [p3 addArrangedSubview:vxRow(@"Sin retroceso",  vxSw(@"norecoil", NO))];
     [p3 addArrangedSubview:vxRow(@"Sin dispersión", vxSw(@"nospread", NO))];
 
     UIStackView *p4 = [[UIStackView alloc] initWithFrame:gPages[4].bounds];
-    p4.axis = UILayoutConstraintAxisVertical; p4.spacing = 6;
+    p4.axis = UILayoutConstraintAxisVertical; p4.spacing = 5;
     [gPages[4] addSubview:p4];
 
-    gLogView = [[UITextView alloc] initWithFrame:CGRectMake(12, 328, 276, 76)];
+    gLogView = [[UITextView alloc] initWithFrame:CGRectMake(12, 326, 276, 72)];
     gLogView.backgroundColor = [UIColor colorWithWhite:0 alpha:0.35];
     gLogView.textColor = [UIColor colorWithWhite:1 alpha:0.8];
     gLogView.font = [UIFont monospacedSystemFontOfSize:9 weight:UIFontWeightRegular];
@@ -721,7 +756,7 @@ static void buildUI(void) {
 
     NSArray *acts = @[@"COPIAR", @"RUN", @"RESET", @"CERRAR"];
     SEL sels[4] = { @selector(vxDoCopy), @selector(vxDoRun), @selector(vxDoReset), @selector(vxDoClose) };
-    UIStackView *foot = [[UIStackView alloc] initWithFrame:CGRectMake(12, 412, 276, 30)];
+    UIStackView *foot = [[UIStackView alloc] initWithFrame:CGRectMake(12, 408, 276, 32)];
     foot.distribution = UIStackViewDistributionFillEqually;
     foot.spacing = 6;
     [content addSubview:foot];
