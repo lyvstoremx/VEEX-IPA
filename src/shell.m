@@ -2,6 +2,7 @@
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
+#import <Security/Security.h>
 #import <objc/runtime.h>
 #import <objc/message.h>
 #import <mach/mach.h>
@@ -164,15 +165,18 @@ static void vxAttach(void);
 - (void)vxDoReset {
     vxLog(@"[VEEX] RESET GUEST...");
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        NSDictionary *q = @{ (__bridge id)kSecClass : (__bridge id)kSecClassGenericPassword };
+        OSStatus st = SecItemDelete((__bridge CFDictionaryRef)q);
+
         NSFileManager *fm = [NSFileManager defaultManager];
         NSString *pref = [NSHomeDirectory() stringByAppendingPathComponent:@"Library/Preferences"];
-        NSString *docs = [NSHomeDirectory() stringByAppendingPathComponent:@"Documents"];
-        for (NSString *p in @[pref, docs]) {
-            for (NSString *f in [fm contentsOfDirectoryAtPath:p error:nil]) {
-                [fm removeItemAtPath:[p stringByAppendingPathComponent:f] error:nil];
+        for (NSString *f in [fm contentsOfDirectoryAtPath:pref error:nil]) {
+            NSString *low = f.lowercaseString;
+            if ([low containsString:@"freefire"] || [low containsString:@"com.dts."]) {
+                [fm removeItemAtPath:[pref stringByAppendingPathComponent:f] error:nil];
             }
         }
-        vxLog(@"[VEEX] RESET hecho, cierra el juego");
+        vxLog(@"[VEEX] RESET hecho (%d), cierra el juego", (int)st);
     });
 }
 - (void)vxDoRun {
@@ -382,6 +386,14 @@ static int l_rv3(lua_State *S) {
 }
 static int l_sc(lua_State *S) {
     lua_pushnumber(S, [UIScreen mainScreen].scale);
+    return 1;
+}
+static int l_sw(lua_State *S) {
+    lua_pushnumber(S, [UIScreen mainScreen].bounds.size.width);
+    return 1;
+}
+static int l_sh(lua_State *S) {
+    lua_pushnumber(S, [UIScreen mainScreen].bounds.size.height);
     return 1;
 }
 static int l_str(lua_State *S) {
@@ -622,6 +634,8 @@ static void vxReg(lua_State *S) {
     lua_register(S, "wv3", l_wv3);
     lua_register(S, "rv3", l_rv3);
     lua_register(S, "sc", l_sc);
+    lua_register(S, "sw", l_sw);
+    lua_register(S, "sh", l_sh);
     lua_register(S, "str", l_str);
     lua_register(S, "scan", l_scan);
     lua_register(S, "clsinit", l_clsinit);
