@@ -1,4 +1,4 @@
-log("VEEX v34")
+log("VEEX v35")
 
 local function pickmax(name)
   local best, bn = nil, -1
@@ -34,7 +34,6 @@ local function kl(p)
   if not p or p == 0 then return 0 end
   return r32(p + 4) * 4294967296 + r32(p)
 end
-
 local function worldPos(e)
   local tr = call(gtr, e)
   if not tr or tr == 0 then return nil end
@@ -42,7 +41,6 @@ local function worldPos(e)
   if not gp then return nil end
   return pos3(gp, tr)
 end
-
 local function pickCam()
   if not (fot and tc) then return end
   local arr = callv(fot, 0, tc)
@@ -50,9 +48,7 @@ local function pickCam()
   for i = 0, math.min(arrlen(arr), 8) - 1 do
     local c = arrat(arr, i)
     if c and c ~= 0 and callf(gdepth, c) == -1 then
-      cam = c
-      cw = calli(gpw, c)
-      ch = calli(gph, c)
+      cam, cw, ch = c, calli(gpw, c), calli(gph, c)
       log("cam " .. cw .. "x" .. ch)
       return
     end
@@ -78,23 +74,29 @@ function tick()
 
   local fx = sw() / math.max(cw, 1)
   local fy = sh() / math.max(ch, 1)
+  local W, H = sw(), sh()
 
   for i = 0, n - 1 do
     local e = arrat(arr, i)
     if e and e ~= 0 then
       local x, y, z = worldPos(e)
       if x then
-        local sx, sy, sz = w2s3(w2s, cam, x, y + 1.5, z)
-        if sz > 1 and sz < 400 then
-          local ax, ay = sx * fx, sy * fy
-          if ax > -150 and ay > -150 and ax < sw() + 150 and ay < sh() + 150 then
-            local h = math.min(400, math.max(22, 620 / sz))
-            local w = h * 0.5
-            rect(ax - w / 2, ay, w, h, 1, 0.2, 0.2, 1)
-            if gnk then
-              local np = call(gnk, e)
-              if np and np ~= 0 then
-                text(str(np), ax - w / 2, ay - 14, 1, 0.2, 0.2, 1)
+        local hx, hy, hz = w2s3(w2s, cam, x, y + 1.7, z)
+        local fxx, fyy, fz = w2s3(w2s, cam, x, y + 0.1, z)
+        if hz > 0.8 and fz > 0.8 and hz < 400 then
+          local ax1, ay1 = hx * fx, hy * fy
+          local ax2, ay2 = fxx * fx, fyy * fy
+          local h = ay2 - ay1
+          if h > 6 then
+            local w = h * 0.45
+            local cx = (ax1 + ax2) / 2
+            if cx > -100 and cx < W + 100 and ay1 > -100 and ay1 < H + 100 then
+              rect(cx - w / 2, ay1, w, h, 1, 0.2, 0.2, 1)
+              if gnk then
+                local np = call(gnk, e)
+                if np and np ~= 0 then
+                  text(str(np), cx - w / 2, ay1 - 13, 1, 0.2, 0.2, 1)
+                end
               end
             end
           end
