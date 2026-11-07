@@ -23,6 +23,22 @@ static NSString *gIDFV;
 static uint64_t gBase, gSize;
 static NSMutableDictionary *gCfg;
 
+typedef void *(*f_dom)(void);
+typedef void *(*f_att)(void *);
+typedef void *(*f_asms)(void *, size_t *);
+typedef void *(*f_img)(void *);
+typedef size_t (*f_ccount)(void *);
+typedef void *(*f_cidx)(void *, size_t);
+typedef const char *(*f_cname)(void *);
+typedef void *(*f_miter)(void *, void **);
+typedef const char *(*f_mname)(void *);
+typedef void *(*f_mfrom)(void *, const char *, int);
+
+static f_dom p_dom; static f_att p_att; static f_asms p_asms; static f_img p_img;
+static f_ccount p_cc; static f_cidx p_ci; static f_cname p_cn;
+static f_miter p_mi; static f_mname p_mn; static f_mfrom p_mf;
+static int gI2C = 0;
+
 static void vxResetGuest(void);
 static void vxBuildTab(void);
 
@@ -94,6 +110,93 @@ static void vxResetGuest(void) {
 - (void)vxDoReset { vxResetGuest(); }
 - (void)vxDoTab { gTab = (int)self.tag; vxBuildTab(); }
 @end
+
+static void vxI2CInit(void) {
+    void *h = dlopen(NULL, RTLD_NOW);
+    p_dom  = (f_dom)dlsym(h, "il2cpp_domain_get");
+    p_att  = (f_att)dlsym(h, "il2cpp_thread_attach");
+    p_asms = (f_asms)dlsym(h, "il2cpp_domain_get_assemblies");
+    p_img  = (f_img)dlsym(h, "il2cpp_assembly_get_image");
+    p_cc   = (f_ccount)dlsym(h, "il2cpp_image_get_class_count");
+    p_ci   = (f_cidx)dlsym(h, "il2cpp_image_get_class");
+    p_cn   = (f_cname)dlsym(h, "il2cpp_class_get_name");
+    p_mi   = (f_miter)dlsym(h, "il2cpp_class_get_methods");
+    p_mn   = (f_mname)dlsym(h, "il2cpp_method_get_name");
+    p_mf   = (f_mfrom)dlsym(h, "il2cpp_class_get_method_from_name");
+    gI2C = p_dom && p_att && p_asms && p_img && p_cc && p_ci && p_cn && p_mi && p_mn && p_mf;
+    if (gI2C) p_att(p_dom());
+    vlog([NSString stringWithFormat:@"i2c %d", gI2C]);
+}
+
+static int l_i2c_ready(lua_State *L) { lua_pushboolean(L, gI2C); return 1; }
+
+static int l_i2c_classes(lua_State *L) {
+    const char *sub = luaL_checkstring(L, 1);
+    lua_newtable(L);
+    if (!gI2C) return 1;
+    size_t n = 0;
+    void **asms = (void **)p_asms(p_dom(), &n);
+    int k = 1;
+    for (size_t a = 0; a < n; a++) {
+        void *img = p_img(asms[a]);
+        if (!img) continue;
+        size_t c = p_cc(img);
+        for (size_t i = 0; i < c; i++) {
+            void *kl = p_ci(img, i);
+            const char *nm = kl ? p_cn(kl) : NULL;
+            if (nm && strstr(nm, sub)) { lua_pushstring(L, nm); lua_rawseti(L, -2, k++); }
+        }
+    }
+    return 1;
+}
+
+static int l_i2c_methods(lua_State *L) {
+    const char *cls = luaL_checkstring(L, 1);
+    const char *sub = luaL_checkstring(L, 2);
+    lua_newtable(L);
+    if (!gI2C) return 1;
+    size_t n = 0;
+    void **asms = (void **)p_asms(p_dom(), &n);
+    int k = 1;
+    for (size_t a = 0; a < n; a++) {
+        void *img = p_img(asms[a]);
+        if (!img) continue;
+        size_t c = p_cc(img);
+        for (size_t i = 0; i < c; i++) {
+            void *kl = p_ci(img, i);
+            if (!kl || strcmp(p_cn(kl), cls)) continue;
+            void *it = NULL;
+            for (;;) {
+                void *m = p_mi(kl, &it);
+                if (!m) break;
+                const char *mn = p_mn(m);
+                if (mn && strstr(mn, sub)) { lua_pushstring(L, mn); lua_rawseti(L, -2, k++); }
+            }
+        }
+    }
+    return 1;
+}
+
+static int l_i2c_ptr(lua_State *L) {
+    const char *cls = luaL_checkstring(L, 1);
+    const char *mth = luaL_checkstring(L, 2);
+    int argc = (int)luaL_optinteger(L, 3, 0);
+    if (!gI2C) { lua_pushnil(L); return 1; }
+    size_t n = 0;
+    void **asms = (void **)p_asms(p_dom(), &n);
+    for (size_t a = 0; a < n; a++) {
+        void *img = p_img(asms[a]);
+        if (!img) continue;
+        size_t c = p_cc(img);
+        for (size_t i = 0; i < c; i++) {
+            void *kl = p_ci(img, i);
+            if (!kl || strcmp(p_cn(kl), cls)) continue;
+            void *m = p_mf(kl, mth, argc);
+            if (m) { lua_pushinteger(L, *(uint64_t *)m); return 1; }
+        }
+    }
+    lua_pushnil(L); return 1;
+}
 
 static int l_cfg(lua_State *L) {
     id v = gCfg[[NSString stringWithUTF8String:luaL_checkstring(L,1)]];
@@ -195,12 +298,11 @@ static int l_clear(lua_State *L) {
 }
 
 static void runScript(void) {
+    vxI2CInit();
+
     NSData *r = [NSData dataWithContentsOfURL:[NSURL URLWithString:
         [NSString stringWithFormat:@"%@?t=%d", @REF_URL, (int)time(NULL)]]];
-    if (r.length) {
-        [r writeToFile:[gDocs stringByAppendingPathComponent:@"ref.dylib"] atomically:YES];
-        vlog([NSString stringWithFormat:@"ref %lu bytes", (unsigned long)r.length]);
-    } else vlog(@"sin ref");
+    if (r.length) [r writeToFile:[gDocs stringByAppendingPathComponent:@"ref.dylib"] atomically:YES];
 
     NSURL *u = [NSURL URLWithString:[NSString stringWithFormat:@"%s?t=%d", SCRIPT_URL, (int)time(NULL)]];
     NSData *d = [NSData dataWithContentsOfURL:u];
@@ -216,6 +318,10 @@ static void runScript(void) {
     lua_register(gL, "w32", l_w32); lua_register(gL, "wf", l_wf);
     lua_register(gL, "scan", l_scan); lua_register(gL, "cfg", l_cfg);
     lua_register(gL, "flen", l_flen); lua_register(gL, "fread", l_fread);
+    lua_register(gL, "i2c_ready", l_i2c_ready);
+    lua_register(gL, "i2c_classes", l_i2c_classes);
+    lua_register(gL, "i2c_methods", l_i2c_methods);
+    lua_register(gL, "i2c_ptr", l_i2c_ptr);
     lua_pushinteger(gL, gBase); lua_setglobal(gL, "BASE");
     lua_pushinteger(gL, gSize); lua_setglobal(gL, "SIZE");
     lua_pushstring(gL, gDocs.UTF8String); lua_setglobal(gL, "DOC");
