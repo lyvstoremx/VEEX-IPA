@@ -96,7 +96,7 @@ static void vxResetGuest(void) {
     NSString *lib = NSSearchPathForDirectoriesInDomains(NSLibraryDirectory, NSUserDomainMask, YES).firstObject;
     [fm removeItemAtPath:doc error:nil];
     [fm removeItemAtPath:[lib stringByAppendingPathComponent:@"Preferences"] error:nil];
-    [fm createDirectoryAtPath:doc withIntermediateDirectories:YES attributes:nil error:nil];
+    [fm createDirectoryAtPath:doc intermediateDirectories:YES attributes:nil error:nil];
 
     gIDFV = [[NSUUID UUID] UUIDString];
     vlog([NSString stringWithFormat:@"reset listo: %@", gIDFV]);
@@ -114,7 +114,6 @@ static void vxResetGuest(void) {
     self.backgroundColor = [UIColor colorWithWhite:0.11 alpha:1];
     [self setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
 }
-- (void)vxDoClear { gLogView.text = @""; }
 @end
 
 static void vxI2CInit(void) {
@@ -202,6 +201,17 @@ static int l_i2c_ptr(lua_State *L) {
         }
     }
     lua_pushnil(L); return 1;
+}
+
+typedef uint64_t (*f_c4)(uint64_t, uint64_t, uint64_t, uint64_t);
+static int l_call(lua_State *L) {
+    uint64_t f = (uint64_t)luaL_checkinteger(L, 1);
+    uint64_t a = (uint64_t)luaL_optinteger(L, 2, 0);
+    uint64_t b = (uint64_t)luaL_optinteger(L, 3, 0);
+    uint64_t c = (uint64_t)luaL_optinteger(L, 4, 0);
+    uint64_t d = (uint64_t)luaL_optinteger(L, 5, 0);
+    lua_pushinteger(L, ((f_c4)f)(a, b, c, d));
+    return 1;
 }
 
 static int l_cfg(lua_State *L) {
@@ -324,6 +334,7 @@ static void runScript(void) {
     lua_register(gL, "w32", l_w32); lua_register(gL, "wf", l_wf);
     lua_register(gL, "scan", l_scan); lua_register(gL, "cfg", l_cfg);
     lua_register(gL, "flen", l_flen); lua_register(gL, "fread", l_fread);
+    lua_register(gL, "call", l_call);
     lua_register(gL, "i2c_ready", l_i2c_ready);
     lua_register(gL, "i2c_classes", l_i2c_classes);
     lua_register(gL, "i2c_methods", l_i2c_methods);
