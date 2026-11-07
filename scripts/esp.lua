@@ -7,11 +7,11 @@ log(string.format("base=%x size=%x magic=%x", b, s, magic or 0))
 local n = 0
 while true do
   clear()
-  text(40, 240, "VEEX OK", 0x00FF00FF, 26)
-  text(40, 275, string.format("base %x", b), 0xFFFFFFFF, 13)
-  text(40, 295, string.format("size %x", s), 0xFFFFFFFF, 13)
-  text(40, 315, string.format("magic %x", magic or 0), 0xFFFFFFFF, 13)
-  text(40, 335, "frames " .. n, 0xFFFFFFFF, 13)
+  text(40, 240, "VEEX OK", 0x00FF00FF, 24)
+  text(40, 272, string.format("base %x", b), 0xFFFFFFFF, 12)
+  text(40, 290, string.format("size %x", s), 0xFFFFFFFF, 12)
+  text(40, 308, string.format("magic %x", magic or 0), 0xFFFFFFFF, 12)
+  text(40, 326, "frames " .. n, 0xFFFFFFFF, 12)
   n = n + 1
   msleep(200)
 end
