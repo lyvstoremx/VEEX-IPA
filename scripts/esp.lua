@@ -1,4 +1,4 @@
-log("VEEX v54")
+log("VEEX v55")
 
 local function pickmax(name)
   local best, bn = nil, -1
@@ -29,17 +29,18 @@ local gph = C and i2c_mptr(C, "get_pixelHeight", 0)
 local tp = P and clstype(P)
 local tc = C and clstype(C)
 local gfwd = i2c_ptr("Transform", "get_forward", 0)
+local gid = P and (i2c_mptr(P, "get_PlayerID", 0) or i2c_mptr(P, "get_PlayerId", 0))
 
 local ghp = P and (i2c_mptr(P, "get_HP", 0) or i2c_mptr(P, "get_Hp", 0)
   or i2c_mptr(P, "get_CurHP", 0) or i2c_mptr(P, "get_Health", 0))
-log("hp=" .. tostring(ghp) .. " fwd=" .. tostring(gfwd))
+log("hp=" .. tostring(ghp) .. " fwd=" .. tostring(gfwd) .. " id=" .. tostring(gid))
 
 local cam, cw, ch, frames, dclog = nil, 0, 0, 0, 0
 local boxes = {}
 
 local MAXHP = 200
 local MAXD  = 300
-local NAMED = 20
+local NAMED = 15
 local NCAP  = 80
 local BCAP  = 60
 
@@ -144,22 +145,10 @@ local function update()
     end
   end
 
-  if dclog < 3 then
-    if li > 0 and mx then
-      local it = list[li]
-      local dx, dy, dz = it.x - mx, it.y - my, it.z - mz
-      local dc = math.sqrt(dx * dx + dy * dy + dz * dz)
-      if fx3 then
-        local dep = dx * fx3 + dy * fy3 + dz * fz3
-        local px, py, pz = dx - dep * fx3, dy - dep * fy3, dz - dep * fz3
-        log(string.format("sel li=%d n=%d dep=%.2f perp=%.2f dc=%.2f",
-          li, #list, dep, math.sqrt(px * px + py * py + pz * pz), dc))
-      else
-        log(string.format("sel li=%d n=%d sinfwd dc=%.2f", li, #list, dc))
-      end
-    else
-      log("sel ninguno n=" .. #list)
-    end
+  local myid = -1
+  if li > 0 and gid then
+    myid = calli(gid, list[li].e)
+    if dclog < 3 then log("myid=" .. tostring(myid)) end
   end
 
   local fx = sw() / math.max(cw, 1)
@@ -169,7 +158,11 @@ local function update()
 
   for i, it in ipairs(list) do
     if count >= BCAP then break end
-    if i ~= li then
+    local skip = (i == li)
+    if not skip and myid ~= -1 and myid ~= 0 and gid then
+      if calli(gid, it.e) == myid then skip = true end
+    end
+    if not skip then
       local hx, hy, hz = w2s3(w2s, cam, it.x, it.y + 1.7, it.z)
       if hz and hz > 1 and hz < MAXD then
         local fxx, fyy = w2s3(w2s, cam, it.x, it.y + 0.1, it.z)
@@ -216,14 +209,14 @@ function tick()
 
   for i, b in ipairs(boxes) do
     local w = b.h * 0.45
-    local near = i > n - 5
+    local near = i > n - 3
     local cr, cg, cb = 1, 0.2, 0.2
     if b.d < 20 then
       cr, cg, cb = 0.3, 1, 0.35
     elseif b.d < 60 then
       cr, cg, cb = 1, 0.9, 0.2
     end
-    if get("line") and b.d < 40 then line(W / 2, 0, b.cx, b.y1, 1, 1, 1, 0.35) end
+    if get("line") and b.d < 25 then line(W / 2, 0, b.cx, b.y1, 1, 1, 1, 0.35) end
     if get("box") then rect(b.cx - w / 2, b.y1, w, b.h, cr, cg, cb, 1) end
     if b.hp and get("hp") then
       local hh = b.h * (b.hp / MAXHP)
