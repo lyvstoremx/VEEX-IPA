@@ -1,4 +1,4 @@
-log("VEEX v46 diag")
+log("VEEX v47")
 
 local function pickmax(name)
   local best, bn = nil, -1
@@ -29,11 +29,12 @@ local gph = C and i2c_mptr(C, "get_pixelHeight", 0)
 local tp = P and clstype(P)
 local tc = C and clstype(C)
 
-log("fot=" .. tostring(fot) .. " gtr=" .. tostring(gtr) .. " w2s=" .. tostring(w2s)
-  .. " gd=" .. tostring(gdepth) .. " tp=" .. tostring(tp) .. " tc=" .. tostring(tc))
-
-local cam, cw, ch, frames, loud = nil, 0, 0, 0, 0
+local cam, cw, ch, frames = nil, 0, 0, 0
 local boxes = {}
+
+local MAXD  = 250
+local NAMED = 60
+local ME    = 2.0
 
 local function kl(p)
   if not p or p == 0 then return 0 end
@@ -61,24 +62,26 @@ local function pickCam()
   end
 end
 
+local function camPos()
+  if not (gtr and cam) then return nil end
+  local ctr = call(gtr, cam)
+  if not ctr or ctr == 0 then return nil end
+  local gp = i2c_mptr(kl(ctr), "get_position", 0)
+  if not gp then return nil end
+  return pos3(gp, ctr)
+end
+
 local function update()
-  loud = loud + 1
-  local L = loud <= 3
-  if L then log("U1") end
   boxes = {}
-  if not (fot and gtr and w2s and tp and tc) then
-    if L then log("U falta") end
-    return
-  end
+  if not (fot and gtr and w2s and tp and tc) then return end
   if not cam then pickCam() end
-  if L then log("U2 cam=" .. tostring(cam)) end
   if not cam then return end
 
+  local mx, my, mz = camPos()
+
   local arr = callv(fot, 0, tp)
-  if L then log("U3 arr=" .. tostring(arr)) end
   if not arr or arr == 0 then return end
   local n = arrlen(arr)
-  if L then log("U4 n=" .. n) end
   if n > 40 then n = 40 end
 
   local fx = sw() / math.max(cw, 1)
@@ -87,35 +90,38 @@ local function update()
   local count = 0
 
   for i = 0, n - 1 do
-    if count >= 30 then break end
+    if count >= 25 then break end
     local e = arrat(arr, i)
     if e and e ~= 0 then
-      if L and i == 0 then log("U5 e=" .. tostring(e)) end
       local x, y, z = worldPos(e)
       if x then
-        if L and i == 0 then log("U6 pos ok") end
-        local hx, hy, hz = w2s3(w2s, cam, x, y + 1.7, z)
-        if hz and hz > 2 and hz < 250 then
-          if L and i == 0 then log("U7 hz=" .. tostring(hz)) end
-          local fxx, fyy = w2s3(w2s, cam, x, y + 0.1, z)
-          local cx = ((hx + fxx) / 2) * fx
-          local ay1 = H - hy * fy
-          local ay2 = H - fyy * fy
-          local h = ay2 - ay1
-          if h > 8 and cx > 0 and cx < W and ay1 > 0 and ay1 < H then
-            local nm = nil
-            if gnk and hz < 120 then
-              local np = call(gnk, e)
-              if np and np ~= 0 then nm = str(np) end
+        local skip = false
+        if mx then
+          local dx, dy, dz = x - mx, y - my, z - mz
+          if dx * dx + dy * dy + dz * dz < ME * ME then skip = true end
+        end
+        if not skip then
+          local hx, hy, hz = w2s3(w2s, cam, x, y + 1.7, z)
+          if hz and hz > 2 and hz < MAXD then
+            local fxx, fyy = w2s3(w2s, cam, x, y + 0.1, z)
+            local cx = ((hx + fxx) / 2) * fx
+            local ay1 = H - hy * fy
+            local ay2 = H - fyy * fy
+            local h = ay2 - ay1
+            if h > 8 and cx > 0 and cx < W and ay1 > 0 and ay1 < H then
+              local nm = nil
+              if gnk and hz < NAMED then
+                local np = call(gnk, e)
+                if np and np ~= 0 then nm = str(np) end
+              end
+              boxes[#boxes + 1] = { cx = cx, y1 = ay1, h = h, d = hz, nm = nm }
+              count = count + 1
             end
-            boxes[#boxes + 1] = { cx = cx, y1 = ay1, h = h, d = hz, nm = nm }
-            count = count + 1
           end
         end
       end
     end
   end
-  if L then log("U8 boxes=" .. #boxes) end
 end
 
 function tick()
