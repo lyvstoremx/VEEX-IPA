@@ -343,6 +343,13 @@ static void *vxFindClass(const char *name) {
 
 typedef struct { float x, y, z; } VXVec3;
 
+// El MethodInfo trae el puntero de código en el primer campo
+static void *vxCode(void *mi) {
+    if (!mi) return NULL;
+    void *p = *(void **)mi;
+    return p;
+}
+
 // ============ LUA ============
 static lua_State *L = NULL;
 static CADisplayLink *gLink = nil;
@@ -407,35 +414,35 @@ static int l_str(lua_State *S) {
 }
 
 static int l_pos3(lua_State *S) {
-    void *m = VXP(lua_tointeger(S, 1));
+    void *code = vxCode(VXP(lua_tointeger(S, 1)));
     void *o = VXP(lua_tointeger(S, 2));
     VXVec3 r = {0, 0, 0};
-    if (m) { VXVec3 (*fn)(void *) = (VXVec3 (*)(void *))m; r = fn(o); }
+    if (code) { VXVec3 (*fn)(void *) = (VXVec3 (*)(void *))code; r = fn(o); }
     lua_pushnumber(S, r.x); lua_pushnumber(S, r.y); lua_pushnumber(S, r.z);
     return 3;
 }
 static int l_w2s3(lua_State *S) {
-    void *m = VXP(lua_tointeger(S, 1));
+    void *code = vxCode(VXP(lua_tointeger(S, 1)));
     void *o = VXP(lua_tointeger(S, 2));
     float x = (float)lua_tonumber(S, 3), y = (float)lua_tonumber(S, 4), z = (float)lua_tonumber(S, 5);
     VXVec3 r = {0, 0, 0};
-    if (m) { VXVec3 (*fn)(void *, float, float, float) = (VXVec3 (*)(void *, float, float, float))m; r = fn(o, x, y, z); }
+    if (code) { VXVec3 (*fn)(void *, float, float, float) = (VXVec3 (*)(void *, float, float, float))code; r = fn(o, x, y, z); }
     lua_pushnumber(S, r.x); lua_pushnumber(S, r.y); lua_pushnumber(S, r.z);
     return 3;
 }
 static int l_calli(lua_State *S) {
-    void *m = VXP(lua_tointeger(S, 1));
+    void *code = vxCode(VXP(lua_tointeger(S, 1)));
     void *o = VXP(lua_tointeger(S, 2));
     int r = 0;
-    if (m) { int (*fn)(void *) = (int (*)(void *))m; r = fn(o); }
+    if (code) { int (*fn)(void *) = (int (*)(void *))code; r = fn(o); }
     lua_pushinteger(S, r);
     return 1;
 }
 static int l_callf(lua_State *S) {
-    void *m = VXP(lua_tointeger(S, 1));
+    void *code = vxCode(VXP(lua_tointeger(S, 1)));
     void *o = VXP(lua_tointeger(S, 2));
     float r = 0;
-    if (m) { float (*fn)(void *) = (float (*)(void *))m; r = fn(o); }
+    if (code) { float (*fn)(void *) = (float (*)(void *))code; r = fn(o); }
     lua_pushnumber(S, r);
     return 1;
 }
