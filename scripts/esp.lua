@@ -1,4 +1,4 @@
-log("VEEX v40")
+log("VEEX v41")
 
 local function pickmax(name)
   local best, bn = nil, -1
@@ -11,6 +11,7 @@ end
 
 local P = pickmax("Player")
 local C = pickmax("Camera")
+local G = i2c_cls("GameFacade")
 local O = nil
 for _, c in ipairs(i2c_clsall("Object")) do
   for _, m in ipairs(i2c_mnames(c)) do
@@ -19,6 +20,24 @@ for _, c in ipairs(i2c_clsall("Object")) do
   if O then break end
 end
 
+local k = 0
+for _, m in ipairs(i2c_mnames(P)) do
+  local l = m:lower()
+  if l:find("playerid") or l == "get_id" or l:find("hp") then
+    log("PM " .. m)
+    k = k + 1
+    if k >= 25 then break end
+  end
+end
+
+local gpid = G and i2c_mptr(G, "CurrentLocalPlayerID", 0)
+local myid = -1
+if gpid then myid = calli(gpid, 0) end
+log("myid=" .. tostring(myid))
+
+local gid = P and (i2c_mptr(P, "get_PlayerID", 0) or i2c_mptr(P, "get_PlayerId", 0) or i2c_mptr(P, "get_Id", 0))
+log("gid=" .. tostring(gid))
+
 local fot = O and i2c_mptr(O, "FindObjectsOfType", 1)
 local gtr = P and i2c_mptr(P, "get_transform", 0)
 local gnk = P and i2c_mptr(P, "get_NickName", 0)
@@ -26,7 +45,6 @@ local w2s = C and i2c_mptr(C, "WorldToScreenPoint", 1)
 local gdepth = C and i2c_mptr(C, "get_depth", 0)
 local gpw = C and i2c_mptr(C, "get_pixelWidth", 0)
 local gph = C and i2c_mptr(C, "get_pixelHeight", 0)
-local ctr = C and i2c_mptr(C, "get_transform", 0)
 local tp = P and clstype(P)
 local tc = C and clstype(C)
 local cam, cw, ch, ct = nil, 0, 0, 0
@@ -68,15 +86,6 @@ function tick()
   if ct % 120 == 0 or not cam then pickCam() end
   if not cam then text("sin camara", 10, by, 1, 1, 1, 1) return end
 
-  local cx0, cy0, cz0 = 0, 0, 0
-  if ctr then
-    local ctrn = call(ctr, cam)
-    if ctrn and ctrn ~= 0 then
-      local gp = i2c_mptr(kl(ctrn), "get_position", 0)
-      if gp then cx0, cy0, cz0 = pos3(gp, ctrn) end
-    end
-  end
-
   local arr = callv(fot, 0, tp)
   if not arr or arr == 0 then return end
   local n = arrlen(arr)
@@ -90,33 +99,34 @@ function tick()
   for i = 0, n - 1 do
     local e = arrat(arr, i)
     if e and e ~= 0 then
-      local x, y, z = worldPos(e)
+      local skip = false
+      if gid and myid and myid ~= -1 then
+        if calli(gid, e) == myid then skip = true end
+      end
+      local x, y, z = nil, nil, nil
+      if not skip then x, y, z = worldPos(e) end
       if x then
-        local dx, dz = x - cx0, z - cz0
-        local flat = math.sqrt(dx * dx + dz * dz)
-        if flat > 3.5 then
-          local hx, hy, hz = w2s3(w2s, cam, x, y + 1.7, z)
-          local fxx, fyy, fz = w2s3(w2s, cam, x, y + 0.1, z)
-          if hz > 1.5 and fz > 1.5 and hz < 300 then
-            local cx = ((hx + fxx) / 2) * fx
-            local ay1 = H - hy * fy
-            local ay2 = H - fyy * fy
-            local h = ay2 - ay1
-            if h > 8 and cx > -60 and cx < W + 60 and ay1 < H and ay2 > 0 then
-              local w = h * 0.45
-              if get("line") then line(W / 2, 0, cx, ay1, 1, 1, 1, 0.55) end
-              if get("box") then rect(cx - w / 2, ay1, w, h, 1, 0.2, 0.2, 1) end
-              if get("name") and gnk and ay1 > 16 then
-                local np = call(gnk, e)
-                if np and np ~= 0 then
-                  text(str(np), cx - w / 2, ay1 - 13, 1, 0.2, 0.2, 1)
-                end
+        local hx, hy, hz = w2s3(w2s, cam, x, y + 1.7, z)
+        local fxx, fyy, fz = w2s3(w2s, cam, x, y + 0.1, z)
+        if hz > 1.5 and fz > 1.5 and hz < 300 then
+          local cx = ((hx + fxx) / 2) * fx
+          local ay1 = H - hy * fy
+          local ay2 = H - fyy * fy
+          local h = ay2 - ay1
+          if h > 8 and cx > 0 and cx < W and ay1 > 0 and ay1 < H and ay2 > 0 then
+            local w = h * 0.45
+            if get("line") then line(W / 2, 0, cx, ay1, 1, 1, 1, 0.55) end
+            if get("box") then rect(cx - w / 2, ay1, w, h, 1, 0.2, 0.2, 1) end
+            if get("name") and gnk and ay1 > 18 then
+              local np = call(gnk, e)
+              if np and np ~= 0 then
+                text(str(np), cx - w / 2, ay1 - 13, 1, 0.2, 0.2, 1)
               end
-              if get("dist") then
-                text(string.format("%dm", math.floor(hz)), cx - 8, ay2 + 2, 1, 1, 1, 1)
-              end
-              drawn = drawn + 1
             end
+            if get("dist") then
+              text(string.format("%dm", math.floor(hz)), cx - 8, ay2 + 2, 1, 1, 1, 1)
+            end
+            drawn = drawn + 1
           end
         end
       end
