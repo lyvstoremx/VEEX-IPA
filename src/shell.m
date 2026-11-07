@@ -1,624 +1,766 @@
+// src/shell.m — VEEX
+#import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
-#import <Security/Security.h>
+#import <QuartzCore/QuartzCore.h>
 #import <objc/runtime.h>
+#import <objc/message.h>
+#import <mach/mach.h>
 #import <mach-o/dyld.h>
 #import <mach-o/loader.h>
-#import <mach/mach.h>
 #import <dlfcn.h>
+#import <sys/types.h>
+#import <sys/sysctl.h>
+#import "fishhook.h"
 #include "lua.h"
 #include "lauxlib.h"
 #include "lualib.h"
-#include "fishhook.h"
 
-#define SCRIPT_URL "https://raw.githubusercontent.com/lyvstoremx/VEEX-IPA/main/scripts/esp.lua"
-#define REF_URL "https://raw.githubusercontent.com/lyvstoremx/VEEX-IPA/main/FreeFire1_v6.dylib"
-#define MAXLBL 128
+// ======== ESCALON DE PRUEBA ========
+#define VX_STAGE 1
 
-static UIWindow *gWin; static UIView *gRoot;
-static UIButton *gBtn; static UIView *gPanel; static UITextView *gLogView;
-static UIView *gContent; static NSMutableArray *gTabBtns;
-static UILabel *gLbl[MAXLBL]; static int gUsed;
-static lua_State *gL; static NSString *gDocs;
-static CGRect gBtnR, gPanelR; static int gOpen; static int gTab;
-static NSString *gIDFV;
-static uint64_t gBase, gSize;
-static NSMutableDictionary *gCfg;
+#define SCRIPT_URL @"https://raw.githubusercontent.com/lyvstoremx/VEEX-IPA/main/scripts/esp.lua"
+#define REF_URL    @"https://raw.githubusercontent.com/lyvstoremx/VEEX-IPA/main/src/shell.m"
 
-typedef void *(*f_dom)(void);
-typedef void *(*f_att)(void *);
-typedef void *(*f_asms)(void *, size_t *);
-typedef void *(*f_img)(void *);
-typedef size_t (*f_ccount)(void *);
-typedef void *(*f_cidx)(void *, size_t);
-typedef const char *(*f_cname)(void *);
-typedef void *(*f_miter)(void *, void **);
-typedef const char *(*f_mname)(void *);
-typedef void *(*f_mfrom)(void *, const char *, int);
+extern int csops(pid_t pid, unsigned int ops, void *useraddr, size_t usersize);
+#define VX_CS_OPS_STATUS 0
+#define VX_CS_VALID      0x0000001
+#define VX_CS_HARD       0x00000100
 
-static f_dom p_dom; static f_att p_att; static f_asms p_asms; static f_img p_img;
-static f_ccount p_cc; static f_cidx p_ci; static f_cname p_cn;
-static f_miter p_mi; static f_mname p_mn; static f_mfrom p_mf;
-static int gI2C = 0;
+// ============ LOG ============
+static NSMutableString *gLog = nil;
+static UITextView *gLogView = nil;
 
-static void vxResetGuest(void);
-static void vxBuildTab(void);
-
-static void vlog(NSString *s) {
+static void vxLog(NSString *fmt, ...) {
+    va_list ap; va_start(ap, fmt);
+    NSString *s = [[NSString alloc] initWithFormat:fmt arguments:ap];
+    va_end(ap);
+    if (!gLog) gLog = [NSMutableString new];
+    [gLog appendFormat:@"%@\n", s];
+    if (gLog.length > 24000) [gLog deleteCharactersInRange:NSMakeRange(0, gLog.length - 24000)];
     dispatch_async(dispatch_get_main_queue(), ^{
-        if (!gLogView) return;
-        gLogView.text = [gLogView.text stringByAppendingFormat:@"%@\n", s];
-        if (gLogView.text.length > 20000)
-            gLogView.text = [gLogView.text substringFromIndex:gLogView.text.length - 20000];
-        [gLogView scrollRangeToVisible:NSMakeRange(gLogView.text.length, 0)];
+        if (gLogView) {
+            gLogView.text = gLog;
+            if (gLog.length) [gLogView scrollRangeToVisible:NSMakeRange(gLog.length - 1, 1)];
+        }
     });
 }
 
-@interface VXRoot : UIView @end
+// ============ CANVAS ============
+@interface VXCanvas : UIView
+@property (nonatomic, strong) NSMutableArray *cmds;
+@end
+@implementation VXCanvas
+- (instancetype)initWithFrame:(CGRect)f {
+    if ((self = [super initWithFrame:f])) {
+        self.backgroundColor = [UIColor clearColor];
+        self.userInteractionEnabled = NO;
+        self.cmds = [NSMutableArray new];
+    }
+    return self;
+}
+- (void)drawRect:(CGRect)r {
+    CGContextRef c = UIGraphicsGetCurrentContext();
+    for (NSArray *a in self.cmds) {
+        NSString *t = a[0];
+        if ([t isEqualToString:@"rect"]) {
+            [a[2] setStroke];
+            CGContextSetLineWidth(c, 1.5);
+            CGContextStrokeRect(c, CGRectFromString(a[1]));
+        } else if ([t isEqualToString:@"line"]) {
+            [a[3] setStroke];
+            CGContextSetLineWidth(c, 1.2);
+            CGPoint p1 = CGPointFromString(a[1]), p2 = CGPointFromString(a[2]);
+            CGContextMoveToPoint(c, p1.x, p1.y);
+            CGContextAddLineToPoint(c, p2.x, p2.y);
+            CGContextStrokePath(c);
+        } else if ([t isEqualToString:@"text"]) {
+            NSDictionary *at = @{NSFontAttributeName: [UIFont boldSystemFontOfSize:11],
+                                 NSForegroundColorAttributeName: a[3]};
+            [a[1] drawAtPoint:CGPointFromString(a[2]) withAttributes:at];
+        }
+    }
+}
+@end
+
+// ============ ROOT ============
+@interface VXRoot : UIView
+@end
 @implementation VXRoot
 - (UIView *)hitTest:(CGPoint)p withEvent:(UIEvent *)e {
-    if (CGRectContainsPoint(gBtnR, p) || (gOpen && CGRectContainsPoint(gPanelR, p)))
-        return [super hitTest:p withEvent:e];
-    return nil;
+    UIView *v = [super hitTest:p withEvent:e];
+    return (v == self) ? nil : v;
 }
 @end
 
-static void vxPatchCryptid(void) {
-    const struct mach_header_64 *h = (const struct mach_header_64 *)_dyld_get_image_header(0);
-    uintptr_t base = (uintptr_t)h & ~(uintptr_t)0x3FFF;
-    vm_protect(mach_task_self(), base, 0x8000, false,
-               VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY);
-    uint8_t *p = (uint8_t *)h + sizeof(*h);
-    for (uint32_t i = 0; i < h->ncmds; i++) {
-        struct load_command *lc = (struct load_command *)p;
-        if (lc->cmd == LC_ENCRYPTION_INFO_64 &&
-            ((struct encryption_info_command_64 *)lc)->cryptid != 1)
-            ((struct encryption_info_command_64 *)lc)->cryptid = 1;
-        p += lc->cmdsize;
-    }
-}
+// ============ BOTONES ============
+@interface UIButton (VX)
+- (void)vxDoTap;
+- (void)vxDoTab;
+- (void)vxDoCopy;
+- (void)vxDoReset;
+- (void)vxDoRun;
+- (void)vxDoClose;
+@end
 
-typedef int (*f_csops)(pid_t, unsigned int, void *, size_t);
-static f_csops o_csops;
+static UIWindow *gWin = nil;
+static VXRoot *gRoot = nil;
+static UIView *gPanel = nil;
+static VXCanvas *gCanvas = nil;
+static UIView *gPages[5];
+static NSMutableDictionary *gSw = nil;
+static int gTab = 0;
 
-static int h_csops(pid_t pid, unsigned int ops, void *ud, size_t sz) {
-    int r = o_csops ? o_csops(pid, ops, ud, sz) : 0;
-    if (ops == 0 && ud) {
-        unsigned *f = (unsigned *)ud;
-        *f |= 1 | 2;
-        *f &= ~0x100;
-    }
-    return r;
-}
+static void buildUI(void);
+static void vxMakeWindow(void);
 
-static void vxBypass(void) {
-    struct rebinding rb = { "csops", (void *)h_csops, (void **)&o_csops };
-    rebind_symbols(&rb, 1);
-}
-
-static id h_IDFV(id s, SEL c) {
-    if (!gIDFV) gIDFV = [[NSUUID UUID] UUIDString];
-    return [[NSUUID alloc] initWithUUIDString:gIDFV];
-}
-
-static void vxInstallHooks(void) {
-    Method m = class_getInstanceMethod([UIDevice class], @selector(identifierForVendor));
-    method_setImplementation(m, (IMP)h_IDFV);
-}
-
-static void vxResetGuest(void) {
-    SecItemDelete((__bridge CFDictionaryRef)@{(__bridge id)kSecClass:(__bridge id)kSecClassGenericPassword});
-    SecItemDelete((__bridge CFDictionaryRef)@{(__bridge id)kSecClass:(__bridge id)kSecClassInternetPassword});
-    SecItemDelete((__bridge CFDictionaryRef)@{(__bridge id)kSecClass:(__bridge id)kSecClassKey});
-
-    NSFileManager *fm = NSFileManager.defaultManager;
-    NSString *doc = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
-    NSString *lib = NSSearchPathForDirectoriesInDomains(NSLibraryDirectory, NSUserDomainMask, YES).firstObject;
-    [fm removeItemAtPath:doc error:nil];
-    [fm removeItemAtPath:[lib stringByAppendingPathComponent:@"Preferences"] error:nil];
-    [fm createDirectoryAtPath:doc withIntermediateDirectories:YES attributes:nil error:nil];
-
-    gIDFV = [[NSUUID UUID] UUIDString];
-    vlog([NSString stringWithFormat:@"reset listo: %@", gIDFV]);
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)),
-                   dispatch_get_main_queue(), ^{ exit(0); });
-}
-
-@interface UIButton (VX) @end
 @implementation UIButton (VX)
-- (void)vxDoTap { gOpen = !gOpen; gPanel.hidden = !gOpen; }
-- (void)vxDoReset { vxResetGuest(); }
-- (void)vxDoTab { gTab = (int)self.tag; vxBuildTab(); }
+- (void)vxDoTap {
+    if (!gPanel) return;
+    gPanel.hidden = !gPanel.hidden;
+    if (!gPanel.hidden) [gRoot bringSubviewToFront:gPanel];
+}
+- (void)vxDoTab {
+    gTab = (int)self.tag;
+    for (int i = 0; i < 5; i++) gPages[i].hidden = (i != gTab);
+}
 - (void)vxDoCopy {
-    UIPasteboard.generalPasteboard.string = gLogView.text ?: @"";
-    self.backgroundColor = [UIColor colorWithWhite:0.11 alpha:1];
-    [self setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
+    [UIPasteboard generalPasteboard].string = gLog ?: @"";
+    vxLog(@"[VEEX] log copiado");
 }
-@end
-
-static void vxI2CInit(void) {
-    void *h = dlopen(NULL, RTLD_NOW);
-    p_dom  = (f_dom)dlsym(h, "il2cpp_domain_get");
-    p_att  = (f_att)dlsym(h, "il2cpp_thread_attach");
-    p_asms = (f_asms)dlsym(h, "il2cpp_domain_get_assemblies");
-    p_img  = (f_img)dlsym(h, "il2cpp_assembly_get_image");
-    p_cc   = (f_ccount)dlsym(h, "il2cpp_image_get_class_count");
-    p_ci   = (f_cidx)dlsym(h, "il2cpp_image_get_class");
-    p_cn   = (f_cname)dlsym(h, "il2cpp_class_get_name");
-    p_mi   = (f_miter)dlsym(h, "il2cpp_class_get_methods");
-    p_mn   = (f_mname)dlsym(h, "il2cpp_method_get_name");
-    p_mf   = (f_mfrom)dlsym(h, "il2cpp_class_get_method_from_name");
-    gI2C = p_dom && p_att && p_asms && p_img && p_cc && p_ci && p_cn && p_mi && p_mn && p_mf;
-    if (gI2C) p_att(p_dom());
-    vlog([NSString stringWithFormat:@"i2c %d", gI2C]);
-}
-
-static int l_i2c_ready(lua_State *L) { lua_pushboolean(L, gI2C); return 1; }
-
-static int l_i2c_cls(lua_State *L) {
-    const char *cls = luaL_checkstring(L, 1);
-    if (!gI2C) { lua_pushnil(L); return 1; }
-    size_t n = 0;
-    void **asms = (void **)p_asms(p_dom(), &n);
-    for (size_t a = 0; a < n; a++) {
-        void *img = p_img(asms[a]);
-        if (!img) continue;
-        size_t c = p_cc(img);
-        for (size_t i = 0; i < c; i++) {
-            void *kl = p_ci(img, i);
-            if (kl && !strcmp(p_cn(kl), cls)) { lua_pushinteger(L, (uint64_t)kl); return 1; }
-        }
-    }
-    lua_pushnil(L); return 1;
-}
-
-static int l_i2c_classes(lua_State *L) {
-    const char *sub = luaL_checkstring(L, 1);
-    lua_newtable(L);
-    if (!gI2C) return 1;
-    size_t n = 0;
-    void **asms = (void **)p_asms(p_dom(), &n);
-    int k = 1;
-    for (size_t a = 0; a < n; a++) {
-        void *img = p_img(asms[a]);
-        if (!img) continue;
-        size_t c = p_cc(img);
-        for (size_t i = 0; i < c; i++) {
-            void *kl = p_ci(img, i);
-            const char *nm = kl ? p_cn(kl) : NULL;
-            if (nm && strstr(nm, sub)) { lua_pushstring(L, nm); lua_rawseti(L, -2, k++); }
-        }
-    }
-    return 1;
-}
-
-static int l_i2c_methods(lua_State *L) {
-    const char *cls = luaL_checkstring(L, 1);
-    const char *sub = luaL_checkstring(L, 2);
-    lua_newtable(L);
-    if (!gI2C) return 1;
-    size_t n = 0;
-    void **asms = (void **)p_asms(p_dom(), &n);
-    int k = 1;
-    for (size_t a = 0; a < n; a++) {
-        void *img = p_img(asms[a]);
-        if (!img) continue;
-        size_t c = p_cc(img);
-        for (size_t i = 0; i < c; i++) {
-            void *kl = p_ci(img, i);
-            if (!kl || strcmp(p_cn(kl), cls)) continue;
-            void *it = NULL;
-            for (;;) {
-                void *m = p_mi(kl, &it);
-                if (!m) break;
-                const char *mn = p_mn(m);
-                if (mn && strstr(mn, sub)) { lua_pushstring(L, mn); lua_rawseti(L, -2, k++); }
+- (void)vxDoReset {
+    vxLog(@"[VEEX] RESET GUEST...");
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        NSFileManager *fm = [NSFileManager defaultManager];
+        NSString *pref = [NSHomeDirectory() stringByAppendingPathComponent:@"Library/Preferences"];
+        NSString *docs = [NSHomeDirectory() stringByAppendingPathComponent:@"Documents"];
+        for (NSString *p in @[pref, docs]) {
+            for (NSString *f in [fm contentsOfDirectoryAtPath:p error:nil]) {
+                [fm removeItemAtPath:[p stringByAppendingPathComponent:f] error:nil];
             }
         }
-    }
-    return 1;
+        vxLog(@"[VEEX] RESET hecho, cierra el juego");
+    });
+}
+- (void)vxDoRun {
+    extern void runScript(void);
+    vxLog(@"[VEEX] lanzando script...");
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        runScript();
+    });
+}
+- (void)vxDoClose {
+    gPanel.hidden = YES;
+}
+@end
+
+// ============ UI HELPERS ============
+static UISwitch *vxSw(NSString *key, BOOL on) {
+    UISwitch *s = [UISwitch new];
+    s.on = on;
+    s.transform = CGAffineTransformMakeScale(0.72, 0.72);
+    if (!gSw) gSw = [NSMutableDictionary new];
+    gSw[key] = s;
+    return s;
+}
+static BOOL vxOn(NSString *key) {
+    UISwitch *s = gSw[key];
+    return s ? s.isOn : NO;
+}
+static UIView *vxRow(NSString *title, UIView *ctl) {
+    UIView *row = [UIView new];
+    row.translatesAutoresizingMaskIntoConstraints = NO;
+    row.backgroundColor = [UIColor colorWithWhite:1 alpha:0.05];
+    row.layer.cornerRadius = 10;
+    UILabel *l = [UILabel new];
+    l.text = title;
+    l.textColor = [UIColor colorWithWhite:1 alpha:0.9];
+    l.font = [UIFont systemFontOfSize:12 weight:UIFontWeightMedium];
+    l.translatesAutoresizingMaskIntoConstraints = NO;
+    [row addSubview:l];
+    [row addSubview:ctl];
+    ctl.translatesAutoresizingMaskIntoConstraints = NO;
+    [NSLayoutConstraint activateConstraints:@[
+        [l.leadingAnchor constraintEqualToAnchor:row.leadingAnchor constant:12],
+        [l.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
+        [ctl.trailingAnchor constraintEqualToAnchor:row.trailingAnchor constant:-10],
+        [ctl.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
+        [row.heightAnchor constraintEqualToConstant:38],
+    ]];
+    return row;
+}
+static UIView *vxPage(void) {
+    UIView *p = [UIView new];
+    p.hidden = YES;
+    p.translatesAutoresizingMaskIntoConstraints = NO;
+    return p;
 }
 
-static int l_i2c_ptr(lua_State *L) {
-    const char *cls = luaL_checkstring(L, 1);
-    const char *mth = luaL_checkstring(L, 2);
-    int argc = (int)luaL_optinteger(L, 3, 0);
-    if (!gI2C) { lua_pushnil(L); return 1; }
-    size_t n = 0;
-    void **asms = (void **)p_asms(p_dom(), &n);
-    for (size_t a = 0; a < n; a++) {
-        void *img = p_img(asms[a]);
-        if (!img) continue;
-        size_t c = p_cc(img);
-        for (size_t i = 0; i < c; i++) {
-            void *kl = p_ci(img, i);
-            if (!kl || strcmp(p_cn(kl), cls)) continue;
-            void *m = p_mf(kl, mth, argc);
-            if (m) { lua_pushinteger(L, *(uint64_t *)m); return 1; }
-        }
-    }
-    lua_pushnil(L); return 1;
-}
-
-typedef uint64_t (*f_c4)(uint64_t, uint64_t, uint64_t, uint64_t);
-static int l_call(lua_State *L) {
-    uint64_t f = (uint64_t)luaL_checkinteger(L, 1);
-    uint64_t a = (uint64_t)luaL_optinteger(L, 2, 0);
-    uint64_t b = (uint64_t)luaL_optinteger(L, 3, 0);
-    uint64_t c = (uint64_t)luaL_optinteger(L, 4, 0);
-    uint64_t d = (uint64_t)luaL_optinteger(L, 5, 0);
-    lua_pushinteger(L, ((f_c4)f)(a, b, c, d));
-    return 1;
-}
-
-typedef struct { float x, y, z; } V3;
-typedef V3 (*f_gv3)(void *);
-typedef V3 (*f_w2s)(void *, V3);
-
-static int l_callv(lua_State *L) {
-    uint64_t f = (uint64_t)luaL_checkinteger(L, 1);
-    uint64_t self = (uint64_t)luaL_optinteger(L, 2, 0);
-    V3 r = ((f_gv3)f)((void *)self);
-    lua_pushnumber(L, r.x); lua_pushnumber(L, r.y); lua_pushnumber(L, r.z);
-    return 3;
-}
-static int l_callv3(lua_State *L) {
-    uint64_t f = (uint64_t)luaL_checkinteger(L, 1);
-    uint64_t self = (uint64_t)luaL_optinteger(L, 2, 0);
-    V3 a = { (float)luaL_checknumber(L, 3), (float)luaL_checknumber(L, 4), (float)luaL_checknumber(L, 5) };
-    V3 r = ((f_w2s)f)((void *)self, a);
-    lua_pushnumber(L, r.x); lua_pushnumber(L, r.y); lua_pushnumber(L, r.z);
-    return 3;
-}
-
-static int l_arrlen(lua_State *L) {
-    void *a = (void *)(uintptr_t)luaL_checkinteger(L, 1);
-    lua_pushinteger(L, a ? (lua_Integer)*(uint64_t *)((char *)a + 24) : 0);
-    return 1;
-}
-static int l_arrat(lua_State *L) {
-    void *a = (void *)(uintptr_t)luaL_checkinteger(L, 1);
-    int i = (int)luaL_checkinteger(L, 2);
-    lua_pushinteger(L, a ? (lua_Integer)*(uint64_t *)((char *)a + 32 + i * 8) : 0);
-    return 1;
-}
-
-static int l_cfg(lua_State *L) {
-    id v = gCfg[[NSString stringWithUTF8String:luaL_checkstring(L,1)]];
-    if (v) lua_pushnumber(L, [v doubleValue]); else lua_pushnil(L);
-    return 1;
-}
-static int l_flen(lua_State *L) {
-    NSString *p = [NSString stringWithUTF8String:luaL_checkstring(L,1)];
-    NSDictionary *a = [NSFileManager.defaultManager attributesOfItemAtPath:p error:nil];
-    lua_pushinteger(L, (lua_Integer)[a[NSFileSize] unsignedLongLongValue]);
-    return 1;
-}
-static int l_fread(lua_State *L) {
-    NSString *p = [NSString stringWithUTF8String:luaL_checkstring(L,1)];
-    long off = (long)luaL_checkinteger(L,2), len = (long)luaL_checkinteger(L,3);
-    NSFileHandle *h = [NSFileHandle fileHandleForReadingAtPath:p];
-    if (!h) { lua_pushnil(L); return 1; }
-    [h seekToFileOffset:off];
-    NSData *d = [h readDataOfLength:len];
-    [h closeFile];
-    lua_pushlstring(L, d.bytes, d.length);
-    return 1;
-}
-
-static int l_rd(lua_State *L) {
-    uint64_t a = (uint64_t)luaL_checkinteger(L,1); size_t n = (size_t)luaL_checkinteger(L,2);
-    uint8_t b[64]; if (n > 64) n = 64; vm_size_t got = 0;
-    if (vm_read_overwrite(mach_task_self(), a, n, (vm_address_t)b, &got) != KERN_SUCCESS) { lua_pushnil(L); return 1; }
-    lua_pushlstring(L, (char *)b, got); return 1;
-}
-static int l_r32(lua_State *L) {
-    uint32_t v = 0; vm_size_t g = 0;
-    if (vm_read_overwrite(mach_task_self(), (uint64_t)luaL_checkinteger(L,1), 4, (vm_address_t)&v, &g) != KERN_SUCCESS) { lua_pushnil(L); return 1; }
-    lua_pushinteger(L, v); return 1;
-}
-static int l_r64(lua_State *L) {
-    uint64_t v = 0; vm_size_t g = 0;
-    if (vm_read_overwrite(mach_task_self(), (uint64_t)luaL_checkinteger(L,1), 8, (vm_address_t)&v, &g) != KERN_SUCCESS) { lua_pushnil(L); return 1; }
-    lua_pushinteger(L, v); return 1;
-}
-static int l_rf(lua_State *L) {
-    float v = 0; vm_size_t g = 0;
-    if (vm_read_overwrite(mach_task_self(), (uint64_t)luaL_checkinteger(L,1), 4, (vm_address_t)&v, &g) != KERN_SUCCESS) { lua_pushnil(L); return 1; }
-    lua_pushnumber(L, v); return 1;
-}
-static int l_w32(lua_State *L) {
-    *(uint32_t *)(uintptr_t)luaL_checkinteger(L,1) = (uint32_t)luaL_checkinteger(L,2); return 0;
-}
-static int l_wf(lua_State *L) {
-    *(float *)(uintptr_t)luaL_checkinteger(L,1) = (float)luaL_checknumber(L,2); return 0;
-}
-static int l_scan(lua_State *L) {
-    const char *pat = luaL_checkstring(L,1);
-    uint8_t by[64]; int8_t mk[64]; int n = 0;
-    for (const char *p = pat; *p && n < 64; ) {
-        if (*p == ' ') { p++; continue; }
-        if (*p == '?') { by[n] = 0; mk[n] = 0; n++; p++; }
-        else { char t[3] = { p[0], p[1], 0 }; by[n] = (uint8_t)strtoul(t, NULL, 16); mk[n] = 1; n++; p += 2; }
-    }
-    if (!n) { lua_pushnil(L); return 1; }
-    uint8_t buf[0x10000];
-    for (uint64_t off = 0; off < gSize; off += sizeof buf) {
-        size_t len = (gSize - off) < sizeof buf ? (gSize - off) : sizeof buf;
-        vm_size_t got = 0;
-        if (vm_read_overwrite(mach_task_self(), gBase + off, len, (vm_address_t)buf, &got) != KERN_SUCCESS) continue;
-        for (size_t i = 0; i + n < got; i++) {
-            int ok = 1;
-            for (int j = 0; j < n; j++) if (mk[j] && buf[i+j] != by[j]) { ok = 0; break; }
-            if (ok) { lua_pushinteger(L, gBase + off + i); return 1; }
-        }
-    }
-    lua_pushnil(L); return 1;
-}
-
-static int l_log(lua_State *L) { vlog([NSString stringWithUTF8String:luaL_checkstring(L,1)]); return 0; }
-static int l_sleep(lua_State *L) { usleep((useconds_t)(luaL_checknumber(L,1)*1000)); return 0; }
-
-static void drawAt(float x, float y, NSString *s, float sz, uint32_t col) {
-    if (gUsed >= MAXLBL) return;
-    UILabel *l = gLbl[gUsed++];
-    l.frame = CGRectMake(x, y, 340, sz + 4); l.text = s;
-    l.font = [UIFont boldSystemFontOfSize:sz];
-    l.textColor = [UIColor colorWithRed:((col>>24)&255)/255.0 green:((col>>16)&255)/255.0
-                                   blue:((col>>8)&255)/255.0 alpha:(col&255)/255.0];
-    l.hidden = NO;
-}
-static int l_text(lua_State *L) {
-    float x = luaL_checknumber(L,1), y = luaL_checknumber(L,2);
-    NSString *s = [NSString stringWithUTF8String:luaL_checkstring(L,3)];
-    uint32_t c = (uint32_t)luaL_optinteger(L,4,0x00FF00FF);
-    float sz = (float)luaL_optnumber(L,5,13);
-    dispatch_async(dispatch_get_main_queue(), ^{ drawAt(x,y,s,sz,c); });
-    return 0;
-}
-static int l_clear(lua_State *L) {
-    dispatch_async(dispatch_get_main_queue(), ^{
-        for (int i = 0; i < gUsed; i++) gLbl[i].hidden = YES; gUsed = 0; });
-    return 0;
-}
-
-static void runScript(void) {
-    vxI2CInit();
-
-    NSData *r = [NSData dataWithContentsOfURL:[NSURL URLWithString:
-        [NSString stringWithFormat:@"%@?t=%d", @REF_URL, (int)time(NULL)]]];
-    if (r.length) [r writeToFile:[gDocs stringByAppendingPathComponent:@"u.idx"] atomically:YES];
-
-    NSURL *u = [NSURL URLWithString:[NSString stringWithFormat:@"%s?t=%d", SCRIPT_URL, (int)time(NULL)]];
-    NSData *d = [NSData dataWithContentsOfURL:u];
-    NSString *path = [gDocs stringByAppendingPathComponent:@"u.dat"];
-    if (d && d.length) { [d writeToFile:path atomically:YES]; vlog(@"script ok"); }
-    else vlog(@"sin script");
-
-    gL = luaL_newstate(); luaL_openlibs(gL);
-    lua_register(gL, "log", l_log); lua_register(gL, "msleep", l_sleep);
-    lua_register(gL, "text", l_text); lua_register(gL, "clear", l_clear);
-    lua_register(gL, "rd", l_rd); lua_register(gL, "r32", l_r32);
-    lua_register(gL, "r64", l_r64); lua_register(gL, "rf", l_rf);
-    lua_register(gL, "w32", l_w32); lua_register(gL, "wf", l_wf);
-    lua_register(gL, "scan", l_scan); lua_register(gL, "cfg", l_cfg);
-    lua_register(gL, "flen", l_flen); lua_register(gL, "fread", l_fread);
-    lua_register(gL, "call", l_call); lua_register(gL, "callv", l_callv);
-    lua_register(gL, "callv3", l_callv3);
-    lua_register(gL, "arrlen", l_arrlen); lua_register(gL, "arrat", l_arrat);
-    lua_register(gL, "i2c_ready", l_i2c_ready);
-    lua_register(gL, "i2c_cls", l_i2c_cls);
-    lua_register(gL, "i2c_classes", l_i2c_classes);
-    lua_register(gL, "i2c_methods", l_i2c_methods);
-    lua_register(gL, "i2c_ptr", l_i2c_ptr);
-    lua_pushinteger(gL, gBase); lua_setglobal(gL, "BASE");
-    lua_pushinteger(gL, gSize); lua_setglobal(gL, "SIZE");
-    lua_pushstring(gL, gDocs.UTF8String); lua_setglobal(gL, "DOC");
-    if (luaL_dofile(gL, path.UTF8String) != LUA_OK) {
-        NSString *e = [NSString stringWithUTF8String:lua_tostring(gL,-1)];
-        vlog([NSString stringWithFormat:@"LUA ERROR: %@", e]);
-    }
-}
+// ============ MEMORIA ============
+static uint64_t gBase = 0;
+static uint64_t gSize = 0;
 
 static void vxFindImage(void) {
-    const struct mach_header_64 *h = NULL;
     uint32_t n = _dyld_image_count();
     for (uint32_t i = 0; i < n; i++) {
         const char *nm = _dyld_get_image_name(i);
-        if (nm && strstr(nm, "UnityFramework")) {
-            h = (const struct mach_header_64 *)_dyld_get_image_header(i);
-            vlog([NSString stringWithFormat:@"imagen: %s", nm]);
-            break;
+        if (!nm || !strstr(nm, "UnityFramework")) continue;
+        const struct mach_header_64 *h = (const struct mach_header_64 *)_dyld_get_image_header(i);
+        if (!h) continue;
+        gBase = (uint64_t)h;
+        const struct load_command *lc = (const struct load_command *)(h + 1);
+        for (uint32_t k = 0; k < h->ncmds; k++) {
+            if (lc->cmd == LC_SEGMENT_64) {
+                const struct segment_command_64 *s = (const void *)lc;
+                if (!strcmp(s->segname, "__TEXT")) { gSize = s->vmsize; break; }
+            }
+            lc = (const struct load_command *)((uint8_t *)lc + lc->cmdsize);
+        }
+        break;
+    }
+    vxLog(@"[VEEX] base=%llx size=%llx", gBase, gSize);
+}
+
+static void vxPatchCryptid(void) {
+    if (!gBase) { vxLog(@"[VEEX] sin base"); return; }
+    const struct mach_header_64 *h = (const void *)gBase;
+    const struct load_command *lc = (const struct load_command *)(h + 1);
+    for (uint32_t k = 0; k < h->ncmds; k++) {
+        if (lc->cmd == LC_ENCRYPTION_INFO_64) {
+            struct encryption_info_command_64 *e = (void *)lc;
+            if (e->cryptid != 0) {
+                uint64_t pg = (uint64_t)e & ~0xFFFULL;
+                vm_protect(mach_task_self(), pg, 0x4000, false,
+                           VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY);
+                e->cryptid = 0;
+                vxLog(@"[VEEX] cryptid parcheado");
+            }
+            return;
+        }
+        lc = (const struct load_command *)((uint8_t *)lc + lc->cmdsize);
+    }
+    vxLog(@"[VEEX] sin LC_ENCRYPTION_INFO_64");
+}
+
+// ============ IL2CPP ============
+static void *gUF = NULL;
+static void *(*p_domain_get)(void) = NULL;
+static void *(*p_domain_get_assemblies)(void *, size_t *) = NULL;
+static void *(*p_assembly_get_image)(void *) = NULL;
+static size_t (*p_image_get_class_count)(void *) = NULL;
+static void *(*p_image_get_class)(void *, size_t) = NULL;
+static const char *(*p_class_get_name)(void *) = NULL;
+static void *(*p_class_get_method_from_name)(void *, const char *, int) = NULL;
+static const char *(*p_method_get_name)(void *) = NULL;
+static void *(*p_class_get_methods)(void *, void **) = NULL;
+static void *(*p_runtime_invoke)(void *, void *, void **, void **) = NULL;
+
+static void vxLoadIL2CPP(void) {
+    if (gUF) return;
+    gUF = dlopen("@rpath/UnityFramework.framework/UnityFramework", RTLD_NOW);
+    if (!gUF) gUF = dlopen("UnityFramework", RTLD_NOW);
+    if (!gUF) { vxLog(@"[VEEX] dlopen UF fallo"); return; }
+    p_domain_get                 = dlsym(gUF, "il2cpp_domain_get");
+    p_domain_get_assemblies      = dlsym(gUF, "il2cpp_domain_get_assemblies");
+    p_assembly_get_image         = dlsym(gUF, "il2cpp_assembly_get_image");
+    p_image_get_class_count      = dlsym(gUF, "il2cpp_image_get_class_count");
+    p_image_get_class            = dlsym(gUF, "il2cpp_image_get_class");
+    p_class_get_name             = dlsym(gUF, "il2cpp_class_get_name");
+    p_class_get_method_from_name = dlsym(gUF, "il2cpp_class_get_method_from_name");
+    p_method_get_name            = dlsym(gUF, "il2cpp_method_get_name");
+    p_class_get_methods          = dlsym(gUF, "il2cpp_class_get_methods");
+    p_runtime_invoke             = dlsym(gUF, "il2cpp_runtime_invoke");
+    vxLog(@"[VEEX] il2cpp %s", p_runtime_invoke ? "OK" : "PARCIAL");
+}
+
+static void *vxFindClass(const char *name) {
+    if (!p_domain_get || !p_runtime_invoke || !p_class_get_name) return NULL;
+    size_t n = 0;
+    void **as = p_domain_get_assemblies(p_domain_get(), &n);
+    for (size_t i = 0; i < n; i++) {
+        void *img = p_assembly_get_image(as[i]);
+        if (!img) continue;
+        size_t cc = p_image_get_class_count(img);
+        for (size_t j = 0; j < cc; j++) {
+            void *c = p_image_get_class(img, j);
+            const char *cn = p_class_get_name(c);
+            if (cn && !strcmp(cn, name)) return c;
         }
     }
-    if (!h) { h = (const struct mach_header_64 *)_dyld_get_image_header(0); vlog(@"imagen 0 (fallback)"); }
-    gBase = (uint64_t)h;
-    const struct segment_command_64 *sg = (const void *)(h + 1);
-    for (uint32_t i = 0; i < h->ncmds; i++) {
-        if (sg->cmd == LC_SEGMENT_64 && strcmp(sg->segname, "__TEXT") == 0) { gSize = sg->vmsize; break; }
-        sg = (const void *)((const char *)sg + sg->cmdsize);
-    }
+    return NULL;
 }
 
-static const char *kTabs[] = { "ESP", "AIM", "DRAW", "MISC", "SET" };
+#define VXP(x) ((void *)(uintptr_t)(x))
 
-@interface VXRow : UIButton @end
-@implementation VXRow
-- (void)vxFlip {
-    NSString *k = (NSString *)objc_getAssociatedObject(self, "k");
-    BOOL on = ![gCfg[k] boolValue];
-    gCfg[k] = @(on);
-    self.backgroundColor = on ? [UIColor colorWithWhite:0.11 alpha:1] : [UIColor colorWithWhite:1 alpha:0.55];
-    [self setTitleColor:on ? UIColor.whiteColor : [UIColor colorWithWhite:0.11 alpha:1] forState:UIControlStateNormal];
+// ============ LUA ============
+static lua_State *L = NULL;
+static CADisplayLink *gLink = nil;
+
+static int l_log(lua_State *S) {
+    const char *s = lua_tostring(S, 1);
+    if (s) vxLog(@"[L] %s", s);
+    return 0;
 }
-@end
+static int l_get(lua_State *S) {
+    const char *k = lua_tostring(S, 1);
+    lua_pushboolean(S, k ? vxOn([NSString stringWithUTF8String:k]) : 0);
+    return 1;
+}
+static int l_w32(lua_State *S) { *(uint32_t *)VXP(lua_tointeger(S,1)) = (uint32_t)lua_tointeger(S,2); return 0; }
+static int l_wf(lua_State *S)  { *(float *)VXP(lua_tointeger(S,1)) = (float)lua_tonumber(S,2); return 0; }
+static int l_r32(lua_State *S) { lua_pushinteger(S, *(uint32_t *)VXP(lua_tointeger(S,1))); return 1; }
+static int l_rf(lua_State *S)  { lua_pushnumber(S, *(float *)VXP(lua_tointeger(S,1))); return 1; }
 
-static void addRow(NSString *title, NSString *key, CGFloat y) {
-    VXRow *b = [VXRow buttonWithType:UIButtonTypeSystem];
-    b.frame = CGRectMake(8, y, 250, 34);
-    b.backgroundColor = [UIColor colorWithWhite:1 alpha:0.55];
-    b.layer.cornerRadius = 17;
-    b.contentHorizontalAlignment = UIControlContentHorizontalAlignmentLeft;
-    b.titleLabel.font = [UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
-    [b setTitle:title forState:UIControlStateNormal];
-    [b setTitleColor:[UIColor colorWithWhite:0.11 alpha:1] forState:UIControlStateNormal];
-    objc_setAssociatedObject(b, "k", key, OBJC_ASSOCIATION_RETAIN);
-    [b addTarget:b action:@selector(vxFlip) forControlEvents:UIControlEventTouchUpInside];
-    [gContent addSubview:b];
+static int l_buf(lua_State *S) {
+    size_t n = (size_t)lua_tointeger(S, 1);
+    if (!n) n = 64;
+    void *p = calloc(1, n);
+    lua_pushinteger(S, (lua_Integer)(uintptr_t)p);
+    return 1;
+}
+static int l_wv3(lua_State *S) {
+    float *p = VXP(lua_tointeger(S, 1));
+    p[0] = (float)lua_tonumber(S, 2);
+    p[1] = (float)lua_tonumber(S, 3);
+    p[2] = (float)lua_tonumber(S, 4);
+    return 0;
+}
+static int l_rv3(lua_State *S) {
+    float *p = VXP(lua_tointeger(S, 1));
+    lua_pushnumber(S, p[0]);
+    lua_pushnumber(S, p[1]);
+    lua_pushnumber(S, p[2]);
+    return 3;
+}
+static int l_sc(lua_State *S) {
+    lua_pushnumber(S, [UIScreen mainScreen].scale);
+    return 1;
+}
+static int l_str(lua_State *S) {
+    void *p = VXP(lua_tointeger(S, 1));
+    if (!p) { lua_pushstring(S, ""); return 1; }
+    int32_t len = *(int32_t *)((char *)p + 0x10);
+    const uint16_t *u = (const uint16_t *)((char *)p + 0x14);
+    char *o = malloc((size_t)len * 4 + 1);
+    int k = 0;
+    for (int i = 0; i < len; i++) {
+        uint32_t c = u[i];
+        if (c < 0x80) o[k++] = (char)c;
+        else if (c < 0x800) { o[k++] = (char)(0xC0 | (c >> 6)); o[k++] = (char)(0x80 | (c & 0x3F)); }
+        else { o[k++] = (char)(0xE0 | (c >> 12)); o[k++] = (char)(0x80 | ((c >> 6) & 0x3F)); o[k++] = (char)(0x80 | (c & 0x3F)); }
+    }
+    o[k] = 0;
+    lua_pushstring(S, o);
+    free(o);
+    return 1;
 }
 
-static void vxBuildTab(void) {
-    for (UIView *v in gContent.subviews) [v removeFromSuperview];
-    for (int i = 0; i < 5; i++) {
-        UIButton *t = gTabBtns[i];
-        BOOL on = (i == gTab);
-        t.backgroundColor = on ? [UIColor colorWithWhite:0.11 alpha:1] : [UIColor colorWithWhite:1 alpha:0.6];
-        [t setTitleColor:on ? UIColor.whiteColor : [UIColor colorWithWhite:0.11 alpha:1] forState:UIControlStateNormal];
-    }
-    CGFloat y = 4;
-    if (gTab == 0) {
-        addRow(@"ESP master", @"esp.on", y); y += 38;
-        addRow(@"Cajas", @"esp.box", y); y += 38;
-        addRow(@"Nombres", @"esp.name", y); y += 38;
-        addRow(@"Distancia", @"esp.dist", y);
-    } else if (gTab == 1) {
-        addRow(@"Aimbot", @"aim.on", y); y += 38;
-        addRow(@"Predicción", @"aim.pred", y); y += 38;
-        addRow(@"Humanizar", @"aim.human", y); y += 38;
-        addRow(@"Triggerbot", @"aim.trigger", y);
-    } else if (gTab == 2) {
-        addRow(@"Salud", @"draw.hp", y); y += 38;
-        addRow(@"Arma", @"draw.wpn", y); y += 38;
-        addRow(@"Líneas", @"draw.line", y); y += 38;
-        addRow(@"Esqueleto", @"draw.skel", y);
-    } else if (gTab == 3) {
-        addRow(@"Contador FPS", @"misc.fps", y); y += 38;
-        addRow(@"Ocultar en lobby", @"misc.hide", y); y += 38;
-        addRow(@"Anti-captura", @"misc.anti", y);
-    } else {
-        addRow(@"RESET GUEST", @"set.reset", y); y += 38;
-        addRow(@"Recargar script", @"set.reload", y);
-    }
-    for (UIView *v in gContent.subviews) {
-        if ([v isKindOfClass:[VXRow class]]) {
-            VXRow *r = (VXRow *)v;
-            NSString *k = (NSString *)objc_getAssociatedObject(r, "k");
-            BOOL on = [gCfg[k] boolValue];
-            r.backgroundColor = on ? [UIColor colorWithWhite:0.11 alpha:1] : [UIColor colorWithWhite:1 alpha:0.55];
-            [r setTitleColor:on ? UIColor.whiteColor : [UIColor colorWithWhite:0.11 alpha:1] forState:UIControlStateNormal];
+static int l_i2c_cls(lua_State *S) {
+    const char *n = lua_tostring(S, 1);
+    void *c = n ? vxFindClass(n) : NULL;
+    if (c) lua_pushinteger(S, (lua_Integer)(uintptr_t)c); else lua_pushnil(S);
+    return 1;
+}
+static int l_i2c_classes(lua_State *S) {
+    lua_newtable(S);
+    if (!p_domain_get || !p_class_get_name) return 1;
+    size_t n = 0; int idx = 1;
+    void **as = p_domain_get_assemblies(p_domain_get(), &n);
+    for (size_t i = 0; i < n; i++) {
+        void *img = p_assembly_get_image(as[i]);
+        if (!img) continue;
+        size_t cc = p_image_get_class_count(img);
+        for (size_t j = 0; j < cc; j++) {
+            const char *cn = p_class_get_name(p_image_get_class(img, j));
+            if (!cn) continue;
+            lua_pushstring(S, cn);
+            lua_rawseti(S, -2, idx++);
+            if (idx > 40000) return 1;
         }
     }
+    return 1;
+}
+static int l_i2c_methods(lua_State *S) {
+    const char *n = lua_tostring(S, 1);
+    void *c = n ? vxFindClass(n) : NULL;
+    lua_newtable(S);
+    if (!c || !p_class_get_methods || !p_method_get_name) return 1;
+    void *iter = NULL;
+    void *m = NULL;
+    int idx = 1;
+    while ((m = p_class_get_methods(c, &iter)) != NULL && idx < 8000) {
+        const char *mn = p_method_get_name(m);
+        if (mn) { lua_pushstring(S, mn); lua_rawseti(S, -2, idx++); }
+    }
+    return 1;
+}
+static int l_i2c_ptr(lua_State *S) {
+    const char *cn = lua_tostring(S, 1);
+    const char *mn = lua_tostring(S, 2);
+    int argc = (int)lua_tointeger(S, 3);
+    void *c = cn ? vxFindClass(cn) : NULL;
+    if (!c) { lua_pushnil(S); return 1; }
+    void *m = p_class_get_method_from_name(c, mn, argc);
+    if (m) lua_pushinteger(S, (lua_Integer)(uintptr_t)m); else lua_pushnil(S);
+    return 1;
+}
+static int l_call(lua_State *S) {
+    void *m = VXP(lua_tointeger(S,1)), *o = VXP(lua_tointeger(S,2)), *exc = NULL;
+    void *r = p_runtime_invoke(m, o, NULL, &exc);
+    if (r) lua_pushinteger(S, (lua_Integer)(uintptr_t)r); else lua_pushnil(S);
+    return 1;
+}
+static int l_callv(lua_State *S) {
+    void *m = VXP(lua_tointeger(S,1)), *o = VXP(lua_tointeger(S,2)), *exc = NULL;
+    void *a[1] = { VXP(lua_tointeger(S,3)) };
+    void *r = p_runtime_invoke(m, o, a, &exc);
+    if (r) lua_pushinteger(S, (lua_Integer)(uintptr_t)r); else lua_pushnil(S);
+    return 1;
+}
+static int l_callv3(lua_State *S) {
+    void *m = VXP(lua_tointeger(S,1)), *o = VXP(lua_tointeger(S,2)), *exc = NULL;
+    void *a[3] = { VXP(lua_tointeger(S,3)), VXP(lua_tointeger(S,4)), VXP(lua_tointeger(S,5)) };
+    void *r = p_runtime_invoke(m, o, a, &exc);
+    if (r) lua_pushinteger(S, (lua_Integer)(uintptr_t)r); else lua_pushnil(S);
+    return 1;
+}
+static int l_arrlen(lua_State *S) { lua_pushinteger(S, *(uint64_t *)((char *)VXP(lua_tointeger(S,1)) + 24)); return 1; }
+static int l_arrat(lua_State *S) {
+    void *a = VXP(lua_tointeger(S,1));
+    uint64_t i = lua_tointeger(S,2);
+    lua_pushinteger(S, *(uint64_t *)((char *)a + 32 + 8 * i));
+    return 1;
+}
+static int l_scan(lua_State *S) {
+    const char *pat = lua_tostring(S, 1);
+    lua_newtable(S);
+    if (!pat || !gBase) return 1;
+    unsigned char bytes[64]; int wild[64]; int n = 0;
+    const char *p = pat;
+    while (*p && n < 64) {
+        while (*p == ' ') p++;
+        if (!*p) break;
+        if (p[0] == '?' && p[1] == '?') { wild[n] = 1; bytes[n] = 0; p += 2; }
+        else { wild[n] = 0; bytes[n] = (unsigned char)strtoul(p, (char **)&p, 16); }
+        n++;
+    }
+    if (!n) return 1;
+    int idx = 1;
+    unsigned char *b = (unsigned char *)gBase;
+    for (uint64_t o = 0; o + n < gSize; o++) {
+        int ok = 1;
+        for (int k = 0; k < n; k++) if (!wild[k] && b[o+k] != bytes[k]) { ok = 0; break; }
+        if (ok) {
+            lua_pushinteger(S, (lua_Integer)(gBase + o));
+            lua_rawseti(S, -2, idx++);
+            if (idx > 200) break;
+        }
+    }
+    return 1;
+}
+static int l_clear(lua_State *S) { [gCanvas.cmds removeAllObjects]; return 0; }
+static UIColor *vxCol(lua_State *S, int base) {
+    if (lua_gettop(S) >= base + 3)
+        return [UIColor colorWithRed:lua_tonumber(S,base) green:lua_tonumber(S,base+1)
+                               blue:lua_tonumber(S,base+2) alpha:lua_tonumber(S,base+3)];
+    return [UIColor redColor];
+}
+static int l_rect(lua_State *S) {
+    CGRect r = CGRectMake(lua_tonumber(S,1), lua_tonumber(S,2), lua_tonumber(S,3), lua_tonumber(S,4));
+    [gCanvas.cmds addObject:@[@"rect", NSStringFromCGRect(r), vxCol(S, 5)]];
+    return 0;
+}
+static int l_line(lua_State *S) {
+    CGPoint a = CGPointMake(lua_tonumber(S,1), lua_tonumber(S,2));
+    CGPoint b = CGPointMake(lua_tonumber(S,3), lua_tonumber(S,4));
+    [gCanvas.cmds addObject:@[@"line", NSStringFromCGPoint(a), NSStringFromCGPoint(b), vxCol(S, 5)]];
+    return 0;
+}
+static int l_text(lua_State *S) {
+    const char *t = lua_tostring(S, 1);
+    CGPoint p = CGPointMake(lua_tonumber(S,2), lua_tonumber(S,3));
+    [gCanvas.cmds addObject:@[@"text", [NSString stringWithUTF8String:t ?: ""], NSStringFromCGPoint(p), vxCol(S, 4)]];
+    return 0;
 }
 
-static void buildUI(UIWindowScene *sc) {
-    gCfg = [NSMutableDictionary dictionary];
-    gCfg[@"esp.on"] = @NO; gCfg[@"esp.box"] = @YES; gCfg[@"esp.name"] = @NO;
-    gCfg[@"esp.dist"] = @YES; gCfg[@"aim.on"] = @NO; gCfg[@"aim.pred"] = @YES;
-    gCfg[@"aim.human"] = @YES; gCfg[@"aim.trigger"] = @NO;
-    gCfg[@"draw.hp"] = @NO; gCfg[@"draw.wpn"] = @NO; gCfg[@"draw.line"] = @NO;
-    gCfg[@"draw.skel"] = @NO; gCfg[@"misc.fps"] = @NO; gCfg[@"misc.hide"] = @NO;
-    gCfg[@"misc.anti"] = @NO;
+static void vxTick(void) {
+    if (!L) return;
+    lua_getglobal(L, "tick");
+    if (lua_isfunction(L, -1)) {
+        if (lua_pcall(L, 0, 0, 0) != LUA_OK) {
+            const char *e = lua_tostring(L, -1);
+            if (e) vxLog(@"[L] tick err: %s", e);
+            lua_pop(L, 1);
+        }
+    } else lua_pop(L, 1);
+    [gCanvas setNeedsDisplay];
+}
 
+static void vxReg(lua_State *S) {
+    lua_register(S, "log", l_log);
+    lua_register(S, "get", l_get);
+    lua_register(S, "w32", l_w32);
+    lua_register(S, "wf", l_wf);
+    lua_register(S, "r32", l_r32);
+    lua_register(S, "rf", l_rf);
+    lua_register(S, "buf", l_buf);
+    lua_register(S, "wv3", l_wv3);
+    lua_register(S, "rv3", l_rv3);
+    lua_register(S, "sc", l_sc);
+    lua_register(S, "str", l_str);
+    lua_register(S, "scan", l_scan);
+    lua_register(S, "i2c_cls", l_i2c_cls);
+    lua_register(S, "i2c_classes", l_i2c_classes);
+    lua_register(S, "i2c_methods", l_i2c_methods);
+    lua_register(S, "i2c_ptr", l_i2c_ptr);
+    lua_register(S, "call", l_call);
+    lua_register(S, "callv", l_callv);
+    lua_register(S, "callv3", l_callv3);
+    lua_register(S, "arrlen", l_arrlen);
+    lua_register(S, "arrat", l_arrat);
+    lua_register(S, "clear", l_clear);
+    lua_register(S, "rect", l_rect);
+    lua_register(S, "line", l_line);
+    lua_register(S, "text", l_text);
+}
+
+void runScript(void) {
+    NSString *tmp = [NSTemporaryDirectory() stringByAppendingPathComponent:@"veex_esp.lua"];
+    NSString *u = [NSString stringWithFormat:@"%@?t=%d", SCRIPT_URL, (int)[NSDate date].timeIntervalSince1970];
+    NSData *d = [NSData dataWithContentsOfURL:[NSURL URLWithString:u]];
+    if (!d) { vxLog(@"[VEEX] descarga fallo"); return; }
+    [d writeToFile:tmp atomically:YES];
+    vxLog(@"[VEEX] script %lu bytes", (unsigned long)d.length);
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (L) { lua_close(L); L = NULL; }
+        L = luaL_newstate();
+        luaL_openlibs(L);
+        vxReg(L);
+        lua_pushinteger(L, (lua_Integer)gBase);
+        lua_setglobal(L, "BASE");
+        if (luaL_dofile(L, tmp.fileSystemRepresentation) != LUA_OK) {
+            const char *e = lua_tostring(L, -1);
+            vxLog(@"[L] load err: %s", e ? e : "?");
+            return;
+        }
+        vxLog(@"[VEEX] script cargado");
+        if (!gLink) {
+            CADisplayLink *ln = [CADisplayLink displayLinkWithTarget:[NSBlockOperation blockOperationWithBlock:^{ vxTick(); }]
+                                                           selector:@selector(main)];
+            gLink = ln;
+            [ln addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
+        }
+    });
+}
+
+// ============ HOOKS ============
+static const char *(*o_dyld_get_image_name)(uint32_t) = NULL;
+static int (*o_csops)(pid_t, unsigned int, void *, size_t) = NULL;
+
+static const char *vxMyPath(void) {
+    Dl_info i;
+    if (dladdr((void *)&vxMyPath, &i) && i.dli_fname) return i.dli_fname;
+    return NULL;
+}
+static const char *h_dyld_get_image_name(uint32_t idx) {
+    const char *n = o_dyld_get_image_name ? o_dyld_get_image_name(idx) : NULL;
+    const char *me = vxMyPath();
+    if (n && me && !strcmp(n, me)) return "/usr/lib/libobjc.A.dylib";
+    return n;
+}
+static int h_csops(pid_t pid, unsigned int op, void *buf, size_t sz) {
+    int r = o_csops ? o_csops(pid, op, buf, sz) : -1;
+    if (r == 0 && op == VX_CS_OPS_STATUS && buf) *(uint32_t *)buf |= (VX_CS_VALID | VX_CS_HARD);
+    return r;
+}
+static void vxInstallHooks(void) {
+    struct rebinding rb[] = {
+        { "_dyld_get_image_name", h_dyld_get_image_name, (void **)&o_dyld_get_image_name },
+        { "csops",                h_csops,                (void **)&o_csops },
+    };
+    int e = rebind_symbols(rb, 2);
+    vxLog(@"[VEEX] hooks=%d", e);
+}
+
+// ============ UI BUILD ============
+static void vxMakeWindow(void) {
+    if (gWin) return;
+    UIWindowScene *sc = nil;
+    for (UIScene *s in [UIApplication sharedApplication].connectedScenes)
+        if ([s isKindOfClass:[UIWindowScene class]]) { sc = (UIWindowScene *)s; break; }
+    if (!sc) { vxLog(@"[VEEX] sin escena"); return; }
     gWin = [[UIWindow alloc] initWithWindowScene:sc];
-    gWin.frame = sc.coordinateSpace.bounds;
     gWin.windowLevel = UIWindowLevelAlert + 1;
-    gWin.backgroundColor = UIColor.clearColor;
-    gRoot = [[VXRoot alloc] initWithFrame:gWin.bounds];
-    gRoot.backgroundColor = UIColor.clearColor;
-    UIViewController *vc = [UIViewController new]; vc.view = gRoot;
+    gWin.backgroundColor = [UIColor clearColor];
+    gRoot = [[VXRoot alloc] initWithFrame:sc.coordinateSpace.bounds];
+    gRoot.backgroundColor = [UIColor clearColor];
+    UIViewController *vc = [UIViewController new];
+    vc.view = gRoot;
     gWin.rootViewController = vc;
-
-    for (int i = 0; i < MAXLBL; i++) { gLbl[i] = [[UILabel alloc] init]; gLbl[i].hidden = YES; [gRoot addSubview:gLbl[i]]; }
-
-    gBtnR = CGRectMake(14, 70, 46, 46);
-    gBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-    gBtn.frame = gBtnR;
-    gBtn.backgroundColor = [UIColor colorWithWhite:1 alpha:0.8];
-    gBtn.layer.cornerRadius = 23;
-    gBtn.titleLabel.font = [UIFont boldSystemFontOfSize:16];
-    [gBtn setTitle:@"VX" forState:UIControlStateNormal];
-    [gBtn setTitleColor:[UIColor colorWithWhite:0.1 alpha:1] forState:UIControlStateNormal];
-    [gBtn addTarget:gBtn action:@selector(vxDoTap) forControlEvents:UIControlEventTouchUpInside];
-    [gRoot addSubview:gBtn];
-
-    gPanelR = CGRectMake(14, 108, 300, 296);
-    gPanel = [[UIView alloc] initWithFrame:gPanelR];
-    gPanel.layer.cornerRadius = 20; gPanel.hidden = YES; gPanel.clipsToBounds = YES;
-    [gRoot addSubview:gPanel];
-
-    UIVisualEffectView *blur = [[UIVisualEffectView alloc] initWithEffect:
-        [UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemUltraThinMaterialLight]];
-    blur.frame = gPanel.bounds;
-    [gPanel addSubview:blur];
-
-    UILabel *t = [[UILabel alloc] initWithFrame:CGRectMake(16, 8, 120, 24)];
-    t.text = @"VEEX"; t.font = [UIFont boldSystemFontOfSize:15];
-    t.textColor = [UIColor colorWithWhite:0.1 alpha:1];
-    [gPanel addSubview:t];
-
-    UIButton *cp = [UIButton buttonWithType:UIButtonTypeSystem];
-    cp.frame = CGRectMake(232, 8, 56, 24);
-    cp.backgroundColor = [UIColor colorWithWhite:1 alpha:0.7];
-    cp.layer.cornerRadius = 12;
-    cp.titleLabel.font = [UIFont boldSystemFontOfSize:9];
-    [cp setTitle:@"COPIAR" forState:UIControlStateNormal];
-    [cp setTitleColor:[UIColor colorWithWhite:0.1 alpha:1] forState:UIControlStateNormal];
-    [cp addTarget:cp action:@selector(vxDoCopy) forControlEvents:UIControlEventTouchUpInside];
-    [gPanel addSubview:cp];
-
-    gTabBtns = [NSMutableArray array];
-    for (int i = 0; i < 5; i++) {
-        UIButton *tb = [UIButton buttonWithType:UIButtonTypeSystem];
-        tb.frame = CGRectMake(16 + i * 54, 34, 50, 26);
-        tb.layer.cornerRadius = 13;
-        tb.tag = i;
-        tb.titleLabel.font = [UIFont boldSystemFontOfSize:10];
-        [tb setTitle:[NSString stringWithUTF8String:kTabs[i]] forState:UIControlStateNormal];
-        [tb addTarget:tb action:@selector(vxDoTab) forControlEvents:UIControlEventTouchUpInside];
-        [gPanel addSubview:tb];
-        [gTabBtns addObject:tb];
-    }
-
-    gContent = [[UIView alloc] initWithFrame:CGRectMake(8, 64, 284, 150)];
-    [gPanel addSubview:gContent];
-
-    gLogView = [[UITextView alloc] initWithFrame:CGRectMake(10, 218, 280, 68)];
-    gLogView.backgroundColor = [UIColor colorWithWhite:0.97 alpha:0.9];
-    gLogView.layer.cornerRadius = 10; gLogView.editable = NO;
-    gLogView.font = [UIFont monospacedSystemFontOfSize:9 weight:UIFontWeightRegular];
-    gLogView.textColor = UIColor.blackColor;
-    [gPanel addSubview:gLogView];
-
-    gTab = 0;
-    vxBuildTab();
     gWin.hidden = NO;
 }
 
-static void boot(int tries) {
-    dispatch_async(dispatch_get_main_queue(), ^{
-        UIWindowScene *sc = nil;
-        for (UIScene *s in UIApplication.sharedApplication.connectedScenes)
-            if ([s isKindOfClass:UIWindowScene.class] && s.activationState == UISceneActivationStateForegroundActive)
-                sc = (UIWindowScene *)s;
-        if (!sc) {
-            if (tries > 0) dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5*NSEC_PER_SEC)),
-                                          dispatch_get_main_queue(), ^{ boot(tries-1); });
-            return;
-        }
-        NSString *cache = NSSearchPathForDirectoriesInDomains(NSCachesDirectory, NSUserDomainMask, YES).firstObject;
-        gDocs = [cache stringByAppendingPathComponent:@"sys"];
-        [NSFileManager.defaultManager createDirectoryAtPath:gDocs withIntermediateDirectories:YES
-                                                 attributes:nil error:nil];
+static void buildUI(void) {
+    if (gPanel) return;
+    vxMakeWindow();
+    if (!gRoot) return;
 
-        vxFindImage();
-        vxPatchCryptid();
-        buildUI(sc);
-        vlog([NSString stringWithFormat:@"VEEX cargado base=%llx size=%llx", gBase, gSize]);
-        dispatch_async(dispatch_get_global_queue(0,0), ^{ runScript(); });
+    gCanvas = [[VXCanvas alloc] initWithFrame:gRoot.bounds];
+    gCanvas.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    [gRoot addSubview:gCanvas];
+
+    UIButton *fab = [UIButton buttonWithType:UIButtonTypeCustom];
+    fab.frame = CGRectMake(14, 96, 46, 46);
+    fab.backgroundColor = [UIColor colorWithWhite:0 alpha:0.55];
+    fab.layer.cornerRadius = 23;
+    fab.layer.borderWidth = 1;
+    fab.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.25].CGColor;
+    [fab setTitle:@"VX" forState:UIControlStateNormal];
+    fab.titleLabel.font = [UIFont boldSystemFontOfSize:15];
+    [fab addTarget:fab action:@selector(vxDoTap) forControlEvents:UIControlEventTouchUpInside];
+    [gRoot addSubview:fab];
+
+    CGSize scr = gRoot.bounds.size;
+    gPanel = [[UIView alloc] initWithFrame:CGRectMake((scr.width - 300) / 2, 60, 300, 452)];
+    gPanel.hidden = YES;
+    gPanel.layer.cornerRadius = 20;
+    gPanel.clipsToBounds = YES;
+    [gRoot addSubview:gPanel];
+
+    UIVisualEffectView *blur = [[UIVisualEffectView alloc]
+        initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemUltraThinMaterialDark]];
+    blur.frame = gPanel.bounds;
+    blur.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    [gPanel addSubview:blur];
+
+    UIView *content = [UIView new];
+    content.frame = gPanel.bounds;
+    [gPanel addSubview:content];
+
+    UILabel *title = [UILabel new];
+    title.text = @"VEEX";
+    title.textColor = [UIColor whiteColor];
+    title.font = [UIFont systemFontOfSize:19 weight:UIFontWeightHeavy];
+    title.frame = CGRectMake(16, 12, 100, 24);
+    [content addSubview:title];
+
+    UIButton *x = [UIButton buttonWithType:UIButtonTypeCustom];
+    x.frame = CGRectMake(258, 10, 30, 30);
+    [x setTitle:@"✕" forState:UIControlStateNormal];
+    [x setTitleColor:[UIColor colorWithWhite:1 alpha:0.7] forState:UIControlStateNormal];
+    [x addTarget:x action:@selector(vxDoClose) forControlEvents:UIControlEventTouchUpInside];
+    [content addSubview:x];
+
+    NSArray *names = @[@"ESP", @"AIM", @"DRAW", @"MISC", @"SET"];
+    UIStackView *tabs = [[UIStackView alloc] initWithFrame:CGRectMake(12, 42, 276, 30)];
+    tabs.distribution = UIStackViewDistributionFillEqually;
+    tabs.spacing = 6;
+    [content addSubview:tabs];
+    for (int i = 0; i < 5; i++) {
+        UIButton *b = [UIButton buttonWithType:UIButtonTypeCustom];
+        b.tag = i;
+        [b setTitle:names[i] forState:UIControlStateNormal];
+        b.titleLabel.font = [UIFont systemFontOfSize:11 weight:UIFontWeightBold];
+        b.backgroundColor = [UIColor colorWithWhite:1 alpha:0.08];
+        b.layer.cornerRadius = 8;
+        [b addTarget:b action:@selector(vxDoTab) forControlEvents:UIControlEventTouchUpInside];
+        [tabs addArrangedSubview:b];
+    }
+
+    UIView *holder = [[UIView alloc] initWithFrame:CGRectMake(12, 80, 276, 240)];
+    [content addSubview:holder];
+    for (int i = 0; i < 5; i++) {
+        gPages[i] = vxPage();
+        gPages[i].frame = holder.bounds;
+        [holder addSubview:gPages[i]];
+    }
+    gPages[0].hidden = NO;
+
+    UIStackView *p0 = [[UIStackView alloc] initWithFrame:gPages[0].bounds];
+    p0.axis = UILayoutConstraintAxisVertical; p0.spacing = 6;
+    [gPages[0] addSubview:p0];
+    [p0 addArrangedSubview:vxRow(@"ESP activo", vxSw(@"esp", YES))];
+    [p0 addArrangedSubview:vxRow(@"Cajas",      vxSw(@"box", YES))];
+    [p0 addArrangedSubview:vxRow(@"Línea",      vxSw(@"line", YES))];
+    [p0 addArrangedSubview:vxRow(@"Nombre",     vxSw(@"name", YES))];
+    [p0 addArrangedSubview:vxRow(@"Distancia",  vxSw(@"dist", YES))];
+    [p0 addArrangedSubview:vxRow(@"Salud",      vxSw(@"hp", YES))];
+
+    UIStackView *p1 = [[UIStackView alloc] initWithFrame:gPages[1].bounds];
+    p1.axis = UILayoutConstraintAxisVertical; p1.spacing = 6;
+    [gPages[1] addSubview:p1];
+    [p1 addArrangedSubview:vxRow(@"Aimbot",     vxSw(@"aim", NO))];
+    [p1 addArrangedSubview:vxRow(@"Silencioso", vxSw(@"aimsilent", YES))];
+    [p1 addArrangedSubview:vxRow(@"FOV 4°",     vxSw(@"aimfov", YES))];
+    [p1 addArrangedSubview:vxRow(@"Suave 0.30", vxSw(@"aimsmooth", YES))];
+    [p1 addArrangedSubview:vxRow(@"Cabeza",     vxSw(@"aimhead", YES))];
+
+    UIStackView *p2 = [[UIStackView alloc] initWithFrame:gPages[2].bounds];
+    p2.axis = UILayoutConstraintAxisVertical; p2.spacing = 6;
+    [gPages[2] addSubview:p2];
+    [p2 addArrangedSubview:vxRow(@"Grosor 1.5", vxSw(@"thick", YES))];
+    [p2 addArrangedSubview:vxRow(@"Esqueleto",  vxSw(@"skel", NO))];
+    [p2 addArrangedSubview:vxRow(@"Snapline",   vxSw(@"snap", NO))];
+
+    UIStackView *p3 = [[UIStackView alloc] initWithFrame:gPages[3].bounds];
+    p3.axis = UILayoutConstraintAxisVertical; p3.spacing = 6;
+    [gPages[3] addSubview:p3];
+    [p3 addArrangedSubview:vxRow(@"Sin retroceso",  vxSw(@"norecoil", NO))];
+    [p3 addArrangedSubview:vxRow(@"Sin dispersión", vxSw(@"nospread", NO))];
+
+    UIStackView *p4 = [[UIStackView alloc] initWithFrame:gPages[4].bounds];
+    p4.axis = UILayoutConstraintAxisVertical; p4.spacing = 6;
+    [gPages[4] addSubview:p4];
+
+    gLogView = [[UITextView alloc] initWithFrame:CGRectMake(12, 328, 276, 76)];
+    gLogView.backgroundColor = [UIColor colorWithWhite:0 alpha:0.35];
+    gLogView.textColor = [UIColor colorWithWhite:1 alpha:0.8];
+    gLogView.font = [UIFont monospacedSystemFontOfSize:9 weight:UIFontWeightRegular];
+    gLogView.editable = NO;
+    gLogView.layer.cornerRadius = 8;
+    [content addSubview:gLogView];
+
+    NSArray *acts = @[@"COPIAR", @"RUN", @"RESET", @"CERRAR"];
+    SEL sels[4] = { @selector(vxDoCopy), @selector(vxDoRun), @selector(vxDoReset), @selector(vxDoClose) };
+    UIStackView *foot = [[UIStackView alloc] initWithFrame:CGRectMake(12, 412, 276, 30)];
+    foot.distribution = UIStackViewDistributionFillEqually;
+    foot.spacing = 6;
+    [content addSubview:foot];
+    for (int i = 0; i < 4; i++) {
+        UIButton *b = [UIButton buttonWithType:UIButtonTypeCustom];
+        [b setTitle:acts[i] forState:UIControlStateNormal];
+        b.titleLabel.font = [UIFont systemFontOfSize:10 weight:UIFontWeightBold];
+        b.backgroundColor = [UIColor colorWithWhite:1 alpha:0.12];
+        b.layer.cornerRadius = 8;
+        [b addTarget:b action:sels[i] forControlEvents:UIControlEventTouchUpInside];
+        [foot addArrangedSubview:b];
+    }
+    vxLog(@"[VEEX] UI lista");
+}
+
+// ============ ARRANQUE ============
+static void boot(double delay) {
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        buildUI();
     });
 }
 
 __attribute__((constructor)) static void vxInit(void) {
-    // vxBypass();
-    // vxInstallHooks();
-    // boot(60);
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+        @autoreleasepool {
+            if (!gLog) gLog = [NSMutableString new];
+            vxLog(@"[VEEX] init stage=%d", VX_STAGE);
+            vxFindImage();
+#if VX_STAGE >= 3
+            vxInstallHooks();
+#endif
+            vxLoadIL2CPP();
+            [NSThread sleepForTimeInterval:2.0];
+#if VX_STAGE >= 2
+            vxPatchCryptid();
+#endif
+            boot(1.5);
+            vxLog(@"[VEEX] arranque completo");
+        }
+    });
 }
