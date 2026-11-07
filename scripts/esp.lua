@@ -1,4 +1,4 @@
-log("VEEX v18")
+log("VEEX v19")
 
 local function pickmax(name)
   local best, bn = nil, -1
@@ -6,12 +6,10 @@ local function pickmax(name)
     local n = #i2c_mnames(c)
     if n > bn then best, bn = c, n end
   end
-  return best, bn
+  return best
 end
 
-local P, pn = pickmax("Player")
-log("P n=" .. pn)
-
+local P = pickmax("Player")
 local O = nil
 for _, c in ipairs(i2c_clsall("Object")) do
   for _, m in ipairs(i2c_mnames(c)) do
@@ -19,37 +17,63 @@ for _, c in ipairs(i2c_clsall("Object")) do
   end
   if O then break end
 end
-log("O=" .. tostring(O))
 
-if O and P then
-  local fot = i2c_mptr(O, "FindObjectsOfType", 1)
-  log("fot=" .. tostring(fot))
-  if fot then
-    local t = clstype(P)
-    log("type=" .. tostring(t))
-    if t then
-      local arr = callv(fot, 0, t)
-      log("arr=" .. tostring(arr))
-      if arr and arr ~= 0 then
-        local n = arrlen(arr)
-        log("n=" .. n)
-        if n > 0 then
-          local e = arrat(arr, 0)
-          log("e0=" .. tostring(e))
-          if e and e ~= 0 then
-            local gn = i2c_mptr(P, "get_NickName", 0)
-            if gn then
-              local np = call(gn, e)
-              if np and np ~= 0 then log("nick0=" .. str(np)) end
+local fot = O and i2c_mptr(O, "FindObjectsOfType", 1)
+local gtr = P and i2c_mptr(P, "get_transform", 0)
+local gnk = P and i2c_mptr(P, "get_NickName", 0)
+local gp = i2c_ptr("Transform", "get_position", 0)
+local w2s = i2c_ptr("Camera", "WorldToScreenPoint", 1)
+local gm = i2c_ptr("Camera", "get_main", 0)
+local vb = buf(16)
+local t = P and clstype(P)
+log("fot=" .. tostring(fot) .. " gtr=" .. tostring(gtr) .. " w2s=" .. tostring(w2s))
+
+local s = sc()
+
+function tick()
+  clear()
+  if not (fot and gtr and gp and w2s and gm and t) then
+    text("faltan metodos", 70, 105, 1, 1, 1, 1)
+    return
+  end
+  local cam = call(gm, 0)
+  if not cam or cam == 0 then
+    text("sin camara", 70, 105, 1, 1, 1, 1)
+    return
+  end
+  local arr = callv(fot, 0, t)
+  if not arr or arr == 0 then return end
+  local n = arrlen(arr)
+  if n > 60 then n = 60 end
+  for i = 0, n - 1 do
+    local e = arrat(arr, i)
+    if e and e ~= 0 then
+      local tr = call(gtr, e)
+      if tr and tr ~= 0 then
+        local vp = call(gp, tr)
+        if vp and vp ~= 0 then
+          local x, y, z = rv3(vp)
+          wv3(vb, x, y + 1.55, z)
+          local sp = callv(w2s, cam, vb)
+          if sp and sp ~= 0 then
+            local sx, sy, sz = rv3(sp)
+            if sz > 0 then
+              local ax = sx / s
+              local ay = sy / s
+              local h = math.max(28, 1400 / math.max(sz, 1))
+              local w = h * 0.52
+              rect(ax - w / 2, ay - h, w, h, 1, 0.2, 0.2, 1)
+              if gnk then
+                local np = call(gnk, e)
+                if np and np ~= 0 then
+                  text(str(np), ax - w / 2, ay - h - 13, 1, 0.2, 0.2, 1)
+                end
+              end
             end
           end
         end
       end
     end
   end
-end
-
-function tick()
-  clear()
-  text("VEEX v18", 70, 105, 1, 1, 1, 1)
+  text("n=" .. n, 70, 105, 1, 1, 1, 1)
 end
