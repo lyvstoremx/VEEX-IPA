@@ -84,12 +84,13 @@ static void vxLog(NSString *fmt, ...) {
 @end
 
 // ============ ROOT ============
+static UIView *gPanelRef(void);
+static UIView *gFabRef(void);
+
 @interface VXRoot : UIView
 @end
 @implementation VXRoot
 - (UIView *)hitTest:(CGPoint)p withEvent:(UIEvent *)e {
-    extern UIView *gPanelRef(void);
-    extern UIView *gFabRef(void);
     UIView *panel = gPanelRef();
     UIView *fab = gFabRef();
     if (panel && !panel.hidden && CGRectContainsPoint(panel.frame, p))
@@ -104,7 +105,6 @@ static void vxLog(NSString *fmt, ...) {
 @interface VXPan : NSObject
 @end
 
-static UIWindow *gWin = nil;
 static VXRoot *gRoot = nil;
 static UIView *gPanel = nil;
 static UIButton *gFab = nil;
@@ -114,8 +114,8 @@ static NSMutableDictionary *gSw = nil;
 static VXPan *gPan = nil;
 static int gTab = 0;
 
-UIView *gPanelRef(void) { return gPanel; }
-UIView *gFabRef(void) { return gFab; }
+static UIView *gPanelRef(void) { return gPanel; }
+static UIView *gFabRef(void) { return gFab; }
 
 @implementation VXPan
 - (void)handle:(UIPanGestureRecognizer *)g {
@@ -145,7 +145,7 @@ UIView *gFabRef(void) { return gFab; }
 @end
 
 static void buildUI(void);
-static void vxMakeWindow(void);
+static void vxAttach(void);
 
 @implementation UIButton (VX)
 - (void)vxDoTap {
@@ -735,27 +735,37 @@ static void vxInstallHooks(void) {
 }
 
 // ============ UI BUILD ============
-static void vxMakeWindow(void) {
-    if (gWin) return;
-    UIWindowScene *sc = nil;
-    for (UIScene *s in [UIApplication sharedApplication].connectedScenes)
-        if ([s isKindOfClass:[UIWindowScene class]]) { sc = (UIWindowScene *)s; break; }
-    if (!sc) { vxLog(@"[VEEX] sin escena"); return; }
-    gWin = [[UIWindow alloc] initWithWindowScene:sc];
-    gWin.windowLevel = UIWindowLevelAlert + 1;
-    gWin.backgroundColor = [UIColor clearColor];
-    gRoot = [[VXRoot alloc] initWithFrame:sc.coordinateSpace.bounds];
-    gRoot.backgroundColor = [UIColor clearColor];
-    UIViewController *vc = [UIViewController new];
-    vc.view = gRoot;
-    gWin.rootViewController = vc;
-    gWin.hidden = NO;
+static UIWindow *vxHostWindow(void) {
+    UIWindow *kw = [UIApplication sharedApplication].keyWindow;
+    if (kw) return kw;
+    for (UIWindow *w in [UIApplication sharedApplication].windows) {
+        if (!w.isHidden && w.bounds.size.width > 100) return w;
+    }
+    return nil;
+}
+
+static void vxAttach(void) {
+    if (!gRoot) return;
+    UIWindow *h = vxHostWindow();
+    if (!h) return;
+    if (gRoot.superview == h) return;
+    gRoot.frame = h.bounds;
+    gRoot.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    [h addSubview:gRoot];
+    [h bringSubviewToFront:gRoot];
 }
 
 static void buildUI(void) {
     if (gPanel) return;
-    vxMakeWindow();
-    if (!gRoot) return;
+
+    gRoot = [[VXRoot alloc] initWithFrame:CGRectMake(0, 0, 320, 568)];
+    gRoot.backgroundColor = [UIColor clearColor];
+    vxAttach();
+    if (!gRoot.superview) { vxLog(@"[VEEX] sin ventana host"); return; }
+
+    [NSTimer scheduledTimerWithTimeInterval:1.0 repeats:YES block:^(NSTimer *tm) {
+        vxAttach();
+    }];
 
     gCanvas = [[VXCanvas alloc] initWithFrame:gRoot.bounds];
     gCanvas.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
