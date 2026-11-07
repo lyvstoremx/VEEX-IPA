@@ -1,4 +1,4 @@
-log("VEEX v39")
+log("VEEX v40")
 
 local function pickmax(name)
   local best, bn = nil, -1
@@ -104,8 +104,8 @@ function tick()
             local h = ay2 - ay1
             if h > 8 and cx > -60 and cx < W + 60 and ay1 < H and ay2 > 0 then
               local w = h * 0.45
+              if get("line") then line(W / 2, 0, cx, ay1, 1, 1, 1, 0.55) end
               if get("box") then rect(cx - w / 2, ay1, w, h, 1, 0.2, 0.2, 1) end
-              if get("line") then line(W / 2, H, cx, ay2, 1, 1, 1, 0.55) end
               if get("name") and gnk and ay1 > 16 then
                 local np = call(gnk, e)
                 if np and np ~= 0 then
