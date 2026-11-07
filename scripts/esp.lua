@@ -1,4 +1,4 @@
-log("VEEX v47")
+log("VEEX v48")
 
 local function pickmax(name)
   local best, bn = nil, -1
@@ -29,7 +29,11 @@ local gph = C and i2c_mptr(C, "get_pixelHeight", 0)
 local tp = P and clstype(P)
 local tc = C and clstype(C)
 
-local cam, cw, ch, frames = nil, 0, 0, 0
+local ghp = P and (i2c_mptr(P, "get_HP", 0) or i2c_mptr(P, "get_Hp", 0)
+  or i2c_mptr(P, "get_CurHP", 0) or i2c_mptr(P, "get_Health", 0))
+log("hp=" .. tostring(ghp))
+
+local cam, cw, ch, frames, hplog = nil, 0, 0, 0, 0
 local boxes = {}
 
 local MAXD  = 250
@@ -109,12 +113,21 @@ local function update()
             local ay2 = H - fyy * fy
             local h = ay2 - ay1
             if h > 8 and cx > 0 and cx < W and ay1 > 0 and ay1 < H then
-              local nm = nil
+              local nm, hp = nil, nil
               if gnk and hz < NAMED then
                 local np = call(gnk, e)
                 if np and np ~= 0 then nm = str(np) end
               end
-              boxes[#boxes + 1] = { cx = cx, y1 = ay1, h = h, d = hz, nm = nm }
+              if ghp then
+                hp = callf(ghp, e)
+                if hp and hplog < 3 then
+                  log("hp0=" .. tostring(hp))
+                  hplog = hplog + 1
+                end
+                if hp and hp > 100 then hp = 100 end
+                if hp and hp < 0 then hp = 0 end
+              end
+              boxes[#boxes + 1] = { cx = cx, y1 = ay1, h = h, d = hz, nm = nm, hp = hp }
               count = count + 1
             end
           end
@@ -137,6 +150,12 @@ function tick()
     local w = b.h * 0.45
     if get("line") then line(W / 2, 0, b.cx, b.y1, 1, 1, 1, 0.5) end
     if get("box") then rect(b.cx - w / 2, b.y1, w, b.h, 1, 0.2, 0.2, 1) end
+    if b.hp and get("hp") then
+      local hh = b.h * (b.hp / 100)
+      if hh < 2 then hh = 2 end
+      fill(b.cx - w / 2 - 6, b.y1, 3, b.h, 0, 0, 0, 0.6)
+      fill(b.cx - w / 2 - 6, b.y1 + (b.h - hh), 3, hh, 0.2, 1, 0.3, 1)
+    end
     if b.nm and get("name") and b.y1 > 18 then
       text(b.nm, b.cx - w / 2, b.y1 - 13, 1, 0.2, 0.2, 1)
     end
