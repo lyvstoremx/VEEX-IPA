@@ -16,7 +16,7 @@
 #include "lauxlib.h"
 #include "lualib.h"
 
-// ===== CAMBIO 1: etapa 3 (hooks de firma y dyld) =====
+// ===== CAMBIO 1: etapa 3 (ocultamiento + firma + depuración) =====
 #define VX_STAGE 3
 #define VX_FPS 20
 
@@ -24,9 +24,14 @@
 #define SCRIPT_RAW @"https://raw.githubusercontent.com/lyvstoremx/VEEX-IPA/main/scripts/esp.lua"
 
 extern int csops(pid_t pid, unsigned int ops, void *useraddr, size_t usersize);
-#define VX_CS_OPS_STATUS 0
-#define VX_CS_VALID      0x0000001
-#define VX_CS_HARD       0x00000100
+#define VX_CS_OPS_STATUS      0
+#define VX_CS_VALID           0x00000001
+#define VX_CS_GET_TASK_ALLOW  0x00000004
+#define VX_CS_HARD            0x00000100
+#define VX_CS_DEBUGGED        0x10000000
+
+#define VX_PFLAG_OFF          32
+#define VX_P_TRACED           0x00000800
 
 // ============ LOG ============
 static NSMutableString *gLog = nil;
@@ -779,32 +784,129 @@ void runScript(void) {
 }
 
 // ============ HOOKS ============
+static uint32_t (*o_dyld_image_count)(void) = NULL;
 static const char *(*o_dyld_get_image_name)(uint32_t) = NULL;
+static const struct mach_header *(*o_dyld_get_image_header)(uint32_t) = NULL;
+static intptr_t (*o_dyld_get_image_vmaddr_slide)(uint32_t) = NULL;
 static int (*o_csops)(pid_t, unsigned int, void *, size_t) = NULL;
+static int (*o_sysctl)(int *, u_int, void *, size_t *, void *, size_t) = NULL;
+static int (*o_sysctlbyname)(const char *, void *, size_t *, void *, size_t) = NULL;
+static OSStatus (*o_sscv)(void *, SecCSFlags, void *) = NULL;
+static OSStatus (*o_sscvw)(void *, SecCSFlags, void *, CFErrorRef *) = NULL;
+static OSStatus (*o_scv)(void *, SecCSFlags, void *) = NULL;
+static OSStatus (*o_scvw)(void *, SecCSFlags, void *, CFErrorRef *) = NULL;
+static CFTypeRef (*o_stcve)(void *, CFStringRef, CFErrorRef *) = NULL;
+
+static uint32_t gMyIdx = 0xFFFFFFFFu;
 
 static const char *vxMyPath(void) {
     Dl_info i;
     if (dladdr((void *)&vxMyPath, &i) && i.dli_fname) return i.dli_fname;
     return NULL;
 }
-static const char *h_dyld_get_image_name(uint32_t idx) {
-    const char *n = o_dyld_get_image_name ? o_dyld_get_image_name(idx) : NULL;
-    const char *me = vxMyPath();
-    if (n && me && !strcmp(n, me)) return "/usr/lib/libobjc.A.dylib";
+
+static uint32_t h_dyld_image_count(void) {
+    uint32_t n = o_dyld_image_count ? o_dyld_image_count() : 0;
+    if (gMyIdx != 0xFFFFFFFFu && n > 0) n--;
     return n;
 }
+static const char *h_dyld_get_image_name(uint32_t i) {
+    if (gMyIdx != 0xFFFFFFFFu && i >= gMyIdx) i++;
+    return o_dyld_get_image_name ? o_dyld_get_image_name(i) : NULL;
+}
+static const struct mach_header *h_dyld_get_image_header(uint32_t i) {
+    if (gMyIdx != 0xFFFFFFFFu && i >= gMyIdx) i++;
+    return o_dyld_get_image_header ? o_dyld_get_image_header(i) : NULL;
+}
+static intptr_t h_dyld_get_image_vmaddr_slide(uint32_t i) {
+    if (gMyIdx != 0xFFFFFFFFu && i >= gMyIdx) i++;
+    return o_dyld_get_image_vmaddr_slide ? o_dyld_get_image_vmaddr_slide(i) : 0;
+}
+
 static int h_csops(pid_t pid, unsigned int op, void *buf, size_t sz) {
     int r = o_csops ? o_csops(pid, op, buf, sz) : -1;
-    if (r == 0 && op == VX_CS_OPS_STATUS && buf) *(uint32_t *)buf |= (VX_CS_VALID | VX_CS_HARD);
+    if (r == 0 && op == VX_CS_OPS_STATUS && buf) {
+        uint32_t f = *(uint32_t *)buf;
+        f |= (VX_CS_VALID | VX_CS_HARD);
+        f &= ~(VX_CS_DEBUGGED | VX_CS_GET_TASK_ALLOW);
+        *(uint32_t *)buf = f;
+    }
     return r;
 }
+
+static void vxClearTraced(void *buf, size_t *len) {
+    if (!buf || !len || *len < (VX_PFLAG_OFF + 4)) return;
+    int *pf = (int *)((char *)buf + VX_PFLAG_OFF);
+    *pf &= ~VX_P_TRACED;
+}
+
+static int h_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp, size_t newlen) {
+    int r = o_sysctl ? o_sysctl(name, namelen, oldp, oldlenp, newp, newlen) : -1;
+    if (r == 0 && name && namelen >= 2 && name[0] == CTL_KERN && name[1] == KERN_PROC)
+        vxClearTraced(oldp, oldlenp);
+    return r;
+}
+
+static int h_sysctlbyname(const char *nm, void *oldp, size_t *oldlenp, void *newp, size_t newlen) {
+    int r = o_sysctlbyname ? o_sysctlbyname(nm, oldp, oldlenp, newp, newlen) : -1;
+    if (r == 0 && nm && !strncmp(nm, "kern.proc", 9)) vxClearTraced(oldp, oldlenp);
+    return r;
+}
+
+static OSStatus h_sscv(void *c, SecCSFlags f, void *req) {
+    if (o_sscv) o_sscv(c, f, req);
+    return 0;
+}
+static OSStatus h_sscvw(void *c, SecCSFlags f, void *req, CFErrorRef *e) {
+    if (o_sscvw) o_sscvw(c, f, req, e);
+    return 0;
+}
+static OSStatus h_scv(void *c, SecCSFlags f, void *req) {
+    if (o_scv) o_scv(c, f, req);
+    return 0;
+}
+static OSStatus h_scvw(void *c, SecCSFlags f, void *req, CFErrorRef *e) {
+    if (o_scvw) o_scvw(c, f, req, e);
+    return 0;
+}
+static CFTypeRef h_stcve(void *task, CFStringRef ent, CFErrorRef *e) {
+    CFTypeRef v = o_stcve ? o_stcve(task, ent, e) : NULL;
+    if (ent && CFEqual(ent, CFSTR("get-task-allow"))) {
+        if (v) CFRelease(v);
+        v = CFRetain(kCFBooleanFalse);
+    }
+    return v;
+}
+
+static void vxFindSelf(void) {
+    if (!o_dyld_image_count || !o_dyld_get_image_name) return;
+    uint32_t n = o_dyld_image_count();
+    const char *me = vxMyPath();
+    if (!me) return;
+    for (uint32_t i = 0; i < n; i++) {
+        const char *nm = o_dyld_get_image_name(i);
+        if (nm && !strcmp(nm, me)) { gMyIdx = i; return; }
+    }
+}
+
 static void vxInstallHooks(void) {
     struct rebinding rb[] = {
-        { "_dyld_get_image_name", h_dyld_get_image_name, (void **)&o_dyld_get_image_name },
-        { "csops",                h_csops,                (void **)&o_csops },
+        { "_dyld_image_count",            h_dyld_image_count,            (void **)&o_dyld_image_count },
+        { "_dyld_get_image_name",         h_dyld_get_image_name,         (void **)&o_dyld_get_image_name },
+        { "_dyld_get_image_header",       h_dyld_get_image_header,       (void **)&o_dyld_get_image_header },
+        { "_dyld_get_image_vmaddr_slide", h_dyld_get_image_vmaddr_slide, (void **)&o_dyld_get_image_vmaddr_slide },
+        { "csops",                        h_csops,                       (void **)&o_csops },
+        { "sysctl",                       h_sysctl,                      (void **)&o_sysctl },
+        { "sysctlbyname",                 h_sysctlbyname,                (void **)&o_sysctlbyname },
+        { "SecStaticCodeCheckValidity",         h_sscv,  (void **)&o_sscv },
+        { "SecStaticCodeCheckValidityWithErrors", h_sscvw, (void **)&o_sscvw },
+        { "SecCodeCheckValidity",               h_scv,   (void **)&o_scv },
+        { "SecCodeCheckValidityWithErrors",     h_scvw,  (void **)&o_scvw },
+        { "SecTaskCopyValueForEntitlement",     h_stcve, (void **)&o_stcve },
     };
-    int e = rebind_symbols(rb, 2);
-    vxLog(@"[VEEX] hooks=%d", e);
+    int e = rebind_symbols(rb, 12);
+    vxFindSelf();
+    vxLog(@"[VEEX] hooks=%d idx=%u", e, gMyIdx);
 }
 
 // ============ UI BUILD ============
