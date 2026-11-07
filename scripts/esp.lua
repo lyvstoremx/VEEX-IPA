@@ -1,20 +1,35 @@
-log("VEEX v14")
+log("VEEX v15")
 
-local m = i2c_ptr("Camera", "get_main", 0)
-local c = nil
-if m then c = call(m, 0) end
-if not c or c == 0 then
-  local cur = i2c_ptr("Camera", "get_current", 0)
-  if cur then c = call(cur, 0) end
-end
-log("cam=" .. tostring(c))
+local MG = i2c_cls("MatchGame")
+local gm = MG and i2c_mptr(MG, "GetMatch", 0)
+log("gm=" .. tostring(gm))
 
-if c and c ~= 0 then
-  local pw = i2c_ptr("Camera", "get_pixelWidth", 0)
-  if pw then log("w=" .. tostring(call(pw, c))) end
+if gm then
+  local inst = call(gm, 0)
+  log("match=" .. tostring(inst))
+  if inst and inst ~= 0 then
+    local gre = i2c_mptr(MG, "GetRepEntity", 1)
+    log("gre=" .. tostring(gre))
+    if gre then
+      local ib = buf(4)
+      local f = 0
+      for id = 0, 60 do
+        w32(ib, id)
+        local e = callv(gre, inst, ib)
+        if e and e ~= 0 then
+          local lo = r32(e)
+          local hi = r32(e + 4)
+          log("E" .. id .. " " .. i2c_cname(hi * 4294967296 + lo))
+          f = f + 1
+          if f >= 6 then break end
+        end
+      end
+      log("found=" .. f)
+    end
+  end
 end
 
 function tick()
   clear()
-  text("VEEX v14", 70, 105, 1, 1, 1, 1)
+  text("VEEX v15", 70, 105, 1, 1, 1, 1)
 end
