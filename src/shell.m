@@ -16,7 +16,8 @@
 #include "lauxlib.h"
 #include "lualib.h"
 
-#define VX_STAGE 1
+// ===== CAMBIO 1: etapa 3 (hooks de firma y dyld) =====
+#define VX_STAGE 3
 #define VX_FPS 20
 
 #define SCRIPT_API @"https://api.github.com/repos/lyvstoremx/VEEX-IPA/contents/scripts/esp.lua"
@@ -654,7 +655,7 @@ static int l_line(lua_State *S) {
 static int l_text(lua_State *S) {
     const char *t = lua_tostring(S, 1);
     CGPoint p = CGPointMake(lua_tonumber(S,2), lua_tonumber(S,3));
-    [gCanvas.cmds addObject:@[@"text", [NSString stringWithUTF8String:t ?: ""], NSStringFromCGPoint(p), vxCol(S, 4)]];
+    [gCanvas.cmds addObject:@["text", [NSString stringWithUTF8String:t ?: ""], NSStringFromCGPoint(p), vxCol(S, 4)]];
     return 0;
 }
 
@@ -941,6 +942,7 @@ static void buildUI(void) {
     [p0 addArrangedSubview:vxRow(@"Línea",      vxSw(@"line", YES))];
     [p0 addArrangedSubview:vxRow(@"Nombre",     vxSw(@"name", YES))];
     [p0 addArrangedSubview:vxRow(@"Distancia",  vxSw(@"dist", YES))];
+    [p0 addArrangedSubview:vxRow(@"Salud",      vxSw(@"hp", YES))];
 
     UIStackView *p1 = [[UIStackView alloc] initWithFrame:gPages[1].bounds];
     p1.axis = UILayoutConstraintAxisVertical; p1.spacing = 5;
@@ -1020,7 +1022,8 @@ __attribute__((constructor)) static void vxInit(void) {
             vxInstallHooks();
 #endif
             [NSThread sleepForTimeInterval:2.0];
-#if VX_STAGE >= 2
+// ===== CAMBIO 2: cryptid apagado en esta prueba (queda en 4) =====
+#if VX_STAGE >= 4
             vxPatchCryptid();
 #endif
             boot(1.5);
