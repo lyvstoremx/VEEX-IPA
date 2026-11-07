@@ -18,7 +18,8 @@
 // ======== ESCALON DE PRUEBA ========
 #define VX_STAGE 1
 
-#define SCRIPT_URL @"https://raw.githubusercontent.com/lyvstoremx/VEEX-IPA/main/scripts/esp.lua"
+#define SCRIPT_API @"https://api.github.com/repos/lyvstoremx/VEEX-IPA/contents/scripts/esp.lua"
+#define SCRIPT_RAW @"https://raw.githubusercontent.com/lyvstoremx/VEEX-IPA/main/scripts/esp.lua"
 #define REF_URL    @"https://raw.githubusercontent.com/lyvstoremx/VEEX-IPA/main/src/shell.m"
 
 extern int csops(pid_t pid, unsigned int ops, void *useraddr, size_t usersize);
@@ -546,14 +547,13 @@ static void vxReg(lua_State *S) {
     lua_register(S, "text", l_text);
 }
 
-void runScript(void) {
-    NSString *u = [NSString stringWithFormat:@"%@?t=%d", SCRIPT_URL, (int)[NSDate date].timeIntervalSince1970];
+static NSData *vxFetch(NSString *url, NSString *accept) {
     NSMutableURLRequest *rq =
-        [NSMutableURLRequest requestWithURL:[NSURL URLWithString:u]
+        [NSMutableURLRequest requestWithURL:[NSURL URLWithString:url]
                                 cachePolicy:NSURLRequestReloadIgnoringLocalAndRemoteCacheData
                             timeoutInterval:20];
     [rq setValue:@"no-cache" forHTTPHeaderField:@"Cache-Control"];
-
+    if (accept) [rq setValue:accept forHTTPHeaderField:@"Accept"];
     __block NSData *got = nil;
     dispatch_semaphore_t sem = dispatch_semaphore_create(0);
     NSURLSessionDataTask *t = [[NSURLSession sharedSession]
@@ -565,11 +565,24 @@ void runScript(void) {
         }];
     [t resume];
     dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, 25 * NSEC_PER_SEC));
-    if (!got) { vxLog(@"[VEEX] descarga fallo"); return; }
+    return got;
+}
+
+void runScript(void) {
+    int t = (int)[NSDate date].timeIntervalSince1970;
+    NSData *got = vxFetch([NSString stringWithFormat:@"%@?ref=main&t=%d", SCRIPT_API, t],
+                          @"application/vnd.github.raw");
+    if (!got || got.length < 20) {
+        got = vxFetch([NSString stringWithFormat:@"%@?t=%d", SCRIPT_RAW, t], nil);
+    }
+    if (!got || got.length < 20) { vxLog(@"[VEEX] descarga fallo"); return; }
+
+    NSString *txt = [[NSString alloc] initWithData:got encoding:NSUTF8StringEncoding];
+    NSString *first = txt ? [txt componentsSeparatedByString:@"\n"].firstObject : @"?";
+    vxLog(@"[VEEX] %lu bytes | %@", (unsigned long)got.length, first);
 
     NSString *tmp = [NSTemporaryDirectory() stringByAppendingPathComponent:@"veex_esp.lua"];
     [got writeToFile:tmp atomically:YES];
-    vxLog(@"[VEEX] script %lu bytes", (unsigned long)got.length);
 
     dispatch_async(dispatch_get_main_queue(), ^{
         if (L) { lua_close(L); L = NULL; }
