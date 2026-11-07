@@ -88,8 +88,15 @@ static void vxLog(NSString *fmt, ...) {
 @end
 @implementation VXRoot
 - (UIView *)hitTest:(CGPoint)p withEvent:(UIEvent *)e {
-    UIView *v = [super hitTest:p withEvent:e];
-    return (v == self) ? nil : v;
+    extern UIView *gPanelRef(void);
+    extern UIView *gFabRef(void);
+    UIView *panel = gPanelRef();
+    UIView *fab = gFabRef();
+    if (panel && !panel.hidden && CGRectContainsPoint(panel.frame, p))
+        return [super hitTest:p withEvent:e];
+    if (fab && !fab.hidden && CGRectContainsPoint(fab.frame, p))
+        return fab;
+    return nil;
 }
 @end
 
@@ -100,11 +107,15 @@ static void vxLog(NSString *fmt, ...) {
 static UIWindow *gWin = nil;
 static VXRoot *gRoot = nil;
 static UIView *gPanel = nil;
+static UIButton *gFab = nil;
 static VXCanvas *gCanvas = nil;
 static UIView *gPages[5];
 static NSMutableDictionary *gSw = nil;
 static VXPan *gPan = nil;
 static int gTab = 0;
+
+UIView *gPanelRef(void) { return gPanel; }
+UIView *gFabRef(void) { return gFab; }
 
 @implementation VXPan
 - (void)handle:(UIPanGestureRecognizer *)g {
@@ -760,6 +771,7 @@ static void buildUI(void) {
     fab.titleLabel.font = [UIFont boldSystemFontOfSize:15];
     [fab addTarget:fab action:@selector(vxDoTap) forControlEvents:UIControlEventTouchUpInside];
     [gRoot addSubview:fab];
+    gFab = fab;
 
     CGSize scr = gRoot.bounds.size;
     CGFloat ph = MIN(452.0, scr.height - 90.0);
