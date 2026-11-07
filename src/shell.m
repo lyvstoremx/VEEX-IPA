@@ -655,7 +655,7 @@ static int l_line(lua_State *S) {
 static int l_text(lua_State *S) {
     const char *t = lua_tostring(S, 1);
     CGPoint p = CGPointMake(lua_tonumber(S,2), lua_tonumber(S,3));
-    [gCanvas.cmds addObject:@["text", [NSString stringWithUTF8String:t ?: ""], NSStringFromCGPoint(p), vxCol(S, 4)]];
+    [gCanvas.cmds addObject:@[@"text", [NSString stringWithUTF8String:t ?: ""], NSStringFromCGPoint(p), vxCol(S, 4)]];
     return 0;
 }
 
