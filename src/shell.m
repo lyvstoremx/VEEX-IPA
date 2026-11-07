@@ -18,6 +18,7 @@ static UILabel *gLbl[MAXLBL]; static int gUsed;
 static lua_State *gL; static NSString *gDocs;
 static CGRect gBtnR, gPanelR; static int gOpen;
 static NSString *gIDFV;
+static uint64_t gBase, gSize;
 
 static void vxResetGuest(void);
 
@@ -88,6 +89,56 @@ static void vxResetGuest(void) {
 - (void)vxDoReset { vxResetGuest(); }
 @end
 
+static int l_rd(lua_State *L) {
+    uint64_t a = (uint64_t)luaL_checkinteger(L,1); size_t n = (size_t)luaL_checkinteger(L,2);
+    uint8_t b[64]; if (n > 64) n = 64; vm_size_t got = 0;
+    if (vm_read_overwrite(mach_task_self(), a, n, (vm_address_t)b, &got) != KERN_SUCCESS) { lua_pushnil(L); return 1; }
+    lua_pushlstring(L, (char *)b, got); return 1;
+}
+static int l_r32(lua_State *L) {
+    uint32_t v = 0; vm_size_t g = 0;
+    if (vm_read_overwrite(mach_task_self(), (uint64_t)luaL_checkinteger(L,1), 4, (vm_address_t)&v, &g) != KERN_SUCCESS) { lua_pushnil(L); return 1; }
+    lua_pushinteger(L, v); return 1;
+}
+static int l_r64(lua_State *L) {
+    uint64_t v = 0; vm_size_t g = 0;
+    if (vm_read_overwrite(mach_task_self(), (uint64_t)luaL_checkinteger(L,1), 8, (vm_address_t)&v, &g) != KERN_SUCCESS) { lua_pushnil(L); return 1; }
+    lua_pushinteger(L, v); return 1;
+}
+static int l_rf(lua_State *L) {
+    float v = 0; vm_size_t g = 0;
+    if (vm_read_overwrite(mach_task_self(), (uint64_t)luaL_checkinteger(L,1), 4, (vm_address_t)&v, &g) != KERN_SUCCESS) { lua_pushnil(L); return 1; }
+    lua_pushnumber(L, v); return 1;
+}
+static int l_w32(lua_State *L) {
+    *(uint32_t *)(uintptr_t)luaL_checkinteger(L,1) = (uint32_t)luaL_checkinteger(L,2); return 0;
+}
+static int l_wf(lua_State *L) {
+    *(float *)(uintptr_t)luaL_checkinteger(L,1) = (float)luaL_checknumber(L,2); return 0;
+}
+static int l_scan(lua_State *L) {
+    const char *pat = luaL_checkstring(L,1);
+    uint8_t by[64]; int8_t mk[64]; int n = 0;
+    for (const char *p = pat; *p && n < 64; ) {
+        if (*p == ' ') { p++; continue; }
+        if (*p == '?') { by[n] = 0; mk[n] = 0; n++; p++; }
+        else { char t[3] = { p[0], p[1], 0 }; by[n] = (uint8_t)strtoul(t, NULL, 16); mk[n] = 1; n++; p += 2; }
+    }
+    if (!n) { lua_pushnil(L); return 1; }
+    uint8_t buf[0x10000];
+    for (uint64_t off = 0; off < gSize; off += sizeof buf) {
+        size_t len = (gSize - off) < sizeof buf ? (gSize - off) : sizeof buf;
+        vm_size_t got = 0;
+        if (vm_read_overwrite(mach_task_self(), gBase + off, len, (vm_address_t)buf, &got) != KERN_SUCCESS) continue;
+        for (size_t i = 0; i + n < got; i++) {
+            int ok = 1;
+            for (int j = 0; j < n; j++) if (mk[j] && buf[i+j] != by[j]) { ok = 0; break; }
+            if (ok) { lua_pushinteger(L, gBase + off + i); return 1; }
+        }
+    }
+    lua_pushnil(L); return 1;
+}
+
 static int l_log(lua_State *L) { vlog([NSString stringWithUTF8String:luaL_checkstring(L,1)]); return 0; }
 static int l_sleep(lua_State *L) { usleep((useconds_t)(luaL_checknumber(L,1)*1000)); return 0; }
 
@@ -121,6 +172,12 @@ static void runScript(void) {
     gL = luaL_newstate(); luaL_openlibs(gL);
     lua_register(gL, "log", l_log); lua_register(gL, "msleep", l_sleep);
     lua_register(gL, "text", l_text); lua_register(gL, "clear", l_clear);
+    lua_register(gL, "rd", l_rd); lua_register(gL, "r32", l_r32);
+    lua_register(gL, "r64", l_r64); lua_register(gL, "rf", l_rf);
+    lua_register(gL, "w32", l_w32); lua_register(gL, "wf", l_wf);
+    lua_register(gL, "scan", l_scan);
+    lua_pushinteger(gL, gBase); lua_setglobal(gL, "BASE");
+    lua_pushinteger(gL, gSize); lua_setglobal(gL, "SIZE");
     if (luaL_dofile(gL, path.UTF8String) != LUA_OK) {
         NSString *e = [NSString stringWithUTF8String:lua_tostring(gL,-1)];
         vlog([NSString stringWithFormat:@"LUA ERROR: %@", e]);
@@ -150,7 +207,7 @@ static void buildUI(UIWindowScene *sc) {
     [gBtn addTarget:gBtn action:@selector(vxDoTap) forControlEvents:UIControlEventTouchUpInside];
     [gRoot addSubview:gBtn];
 
-    gPanelR = CGRectMake(14, 124, 340, 330);
+    gPanelR = CGRectMake(14, 124, 340, 250);
     gPanel = [[UIView alloc] initWithFrame:gPanelR];
     gPanel.backgroundColor = [UIColor colorWithWhite:1 alpha:0.85];
     gPanel.layer.cornerRadius = 18; gPanel.hidden = YES; gPanel.clipsToBounds = YES;
@@ -171,7 +228,7 @@ static void buildUI(UIWindowScene *sc) {
     [rst addTarget:rst action:@selector(vxDoReset) forControlEvents:UIControlEventTouchUpInside];
     [gPanel addSubview:rst];
 
-    gLogView = [[UITextView alloc] initWithFrame:CGRectMake(12, 80, 316, 238)];
+    gLogView = [[UITextView alloc] initWithFrame:CGRectMake(12, 80, 316, 158)];
     gLogView.backgroundColor = [UIColor colorWithWhite:0.96 alpha:1];
     gLogView.layer.cornerRadius = 10; gLogView.editable = NO;
     gLogView.font = [UIFont monospacedSystemFontOfSize:10 weight:UIFontWeightRegular];
@@ -193,9 +250,18 @@ static void boot(int tries) {
             return;
         }
         gDocs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
+
+        const struct mach_header_64 *h = (const struct mach_header_64 *)_dyld_get_image_header(0);
+        gBase = (uint64_t)h + (uint64_t)_dyld_get_image_vmaddr_slide(0);
+        const struct segment_command_64 *sg = (const void *)(h + 1);
+        for (uint32_t i = 0; i < h->ncmds; i++) {
+            if (sg->cmd == LC_SEGMENT_64 && strcmp(sg->segname, "__TEXT") == 0) { gSize = sg->vmsize; break; }
+            sg = (const void *)((const char *)sg + sg->cmdsize);
+        }
+
         buildUI(sc);
         vxPatchCryptid();
-        vlog(@"VEEX cargado");
+        vlog([NSString stringWithFormat:@"VEEX cargado base=%llx size=%llx", gBase, gSize]);
         dispatch_async(dispatch_get_global_queue(0,0), ^{ runScript(); });
     });
 }
