@@ -1,4 +1,4 @@
-log("VEEX v53")
+log("VEEX v54")
 
 local function pickmax(name)
   local best, bn = nil, -1
@@ -143,7 +143,24 @@ local function update()
       end
     end
   end
-  if dclog == 0 then log("li=" .. li .. " n=" .. #list) end
+
+  if dclog < 3 then
+    if li > 0 and mx then
+      local it = list[li]
+      local dx, dy, dz = it.x - mx, it.y - my, it.z - mz
+      local dc = math.sqrt(dx * dx + dy * dy + dz * dz)
+      if fx3 then
+        local dep = dx * fx3 + dy * fy3 + dz * fz3
+        local px, py, pz = dx - dep * fx3, dy - dep * fy3, dz - dep * fz3
+        log(string.format("sel li=%d n=%d dep=%.2f perp=%.2f dc=%.2f",
+          li, #list, dep, math.sqrt(px * px + py * py + pz * pz), dc))
+      else
+        log(string.format("sel li=%d n=%d sinfwd dc=%.2f", li, #list, dc))
+      end
+    else
+      log("sel ninguno n=" .. #list)
+    end
+  end
 
   local fx = sw() / math.max(cw, 1)
   local fy = sh() / math.max(ch, 1)
