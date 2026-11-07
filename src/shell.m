@@ -613,7 +613,7 @@ static void boot(int tries) {
         vxPatchCryptid();
         buildUI(sc);
         vlog([NSString stringWithFormat:@"VEEX cargado base=%llx size=%llx", gBase, gSize]);
-        dispatch_async(dispatch_get_global_queue(0,0), ^{ runScript(); });
+        // dispatch_async(dispatch_get_global_queue(0,0), ^{ runScript(); });
     });
 }
 
