@@ -8,6 +8,7 @@
 #include "lua.h"
 #include "lauxlib.h"
 #include "lualib.h"
+#include "fishhook.h"
 
 #define SCRIPT_URL "https://raw.githubusercontent.com/lyvstoremx/VEEX-IPA/main/scripts/esp.lua"
 #define REF_URL "https://raw.githubusercontent.com/lyvstoremx/VEEX-IPA/main/FreeFire1_v6.dylib"
@@ -74,6 +75,24 @@ static void vxPatchCryptid(void) {
             ((struct encryption_info_command_64 *)lc)->cryptid = 1;
         p += lc->cmdsize;
     }
+}
+
+typedef int (*f_csops)(pid_t, unsigned int, void *, size_t);
+static f_csops o_csops;
+
+static int h_csops(pid_t pid, unsigned int ops, void *ud, size_t sz) {
+    int r = o_csops ? o_csops(pid, ops, ud, sz) : 0;
+    if (ops == 0 && ud) {
+        unsigned *f = (unsigned *)ud;
+        *f |= 1 | 2;
+        *f &= ~0x100;
+    }
+    return r;
+}
+
+static void vxBypass(void) {
+    struct rebinding rb = { "csops", (void *)h_csops, (void **)&o_csops };
+    rebind_symbols(&rb, 1);
 }
 
 static id h_IDFV(id s, SEL c) {
@@ -367,13 +386,13 @@ static void runScript(void) {
 
     NSData *r = [NSData dataWithContentsOfURL:[NSURL URLWithString:
         [NSString stringWithFormat:@"%@?t=%d", @REF_URL, (int)time(NULL)]]];
-    if (r.length) [r writeToFile:[gDocs stringByAppendingPathComponent:@"ref.dylib"] atomically:YES];
+    if (r.length) [r writeToFile:[gDocs stringByAppendingPathComponent:@"u.idx"] atomically:YES];
 
     NSURL *u = [NSURL URLWithString:[NSString stringWithFormat:@"%s?t=%d", SCRIPT_URL, (int)time(NULL)]];
     NSData *d = [NSData dataWithContentsOfURL:u];
-    NSString *path = [gDocs stringByAppendingPathComponent:@"esp.lua"];
+    NSString *path = [gDocs stringByAppendingPathComponent:@"u.dat"];
     if (d && d.length) { [d writeToFile:path atomically:YES]; vlog(@"script ok"); }
-    else vlog(@"sin script, uso copia local");
+    else vlog(@"sin script");
 
     gL = luaL_newstate(); luaL_openlibs(gL);
     lua_register(gL, "log", l_log); lua_register(gL, "msleep", l_sleep);
@@ -397,26 +416,6 @@ static void runScript(void) {
     if (luaL_dofile(gL, path.UTF8String) != LUA_OK) {
         NSString *e = [NSString stringWithUTF8String:lua_tostring(gL,-1)];
         vlog([NSString stringWithFormat:@"LUA ERROR: %@", e]);
-    }
-}
-
-static void vxHideSelf(void) {
-    uint32_t n = _dyld_image_count();
-    for (uint32_t i = 0; i < n; i++) {
-        const char *nm = _dyld_get_image_name(i);
-        if (!nm || !strstr(nm, "veex")) continue;
-        size_t len = strlen(nm);
-        uintptr_t page = (uintptr_t)nm & ~(uintptr_t)0xFFF;
-        vm_protect(mach_task_self(), page, 0x2000, false,
-                   VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY);
-        const char *fake = "/usr/lib/libAudioToolbox.dylib";
-        char buf[256];
-        memset(buf, ' ', len);
-        memcpy(buf, fake, strlen(fake) < len ? strlen(fake) : len);
-        buf[len] = 0;
-        memcpy((void *)nm, buf, len);
-        vlog([NSString stringWithFormat:@"oculto: %s", buf]);
-        break;
     }
 }
 
@@ -605,8 +604,13 @@ static void boot(int tries) {
                                           dispatch_get_main_queue(), ^{ boot(tries-1); });
             return;
         }
-        gDocs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
+        NSString *cache = NSSearchPathForDirectoriesInDomains(NSCachesDirectory, NSUserDomainMask, YES).firstObject;
+        gDocs = [cache stringByAppendingPathComponent:@"sys"];
+        [NSFileManager.defaultManager createDirectoryAtPath:gDocs withIntermediateDirectories:YES
+                                                 attributes:nil error:nil];
+
         vxFindImage();
+        vxPatchCryptid();
         buildUI(sc);
         vlog([NSString stringWithFormat:@"VEEX cargado base=%llx size=%llx", gBase, gSize]);
         dispatch_async(dispatch_get_global_queue(0,0), ^{ runScript(); });
@@ -614,6 +618,7 @@ static void boot(int tries) {
 }
 
 __attribute__((constructor)) static void vxInit(void) {
+    vxBypass();
     vxInstallHooks();
     boot(60);
 }
