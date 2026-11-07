@@ -96,7 +96,7 @@ static void vxResetGuest(void) {
     NSString *lib = NSSearchPathForDirectoriesInDomains(NSLibraryDirectory, NSUserDomainMask, YES).firstObject;
     [fm removeItemAtPath:doc error:nil];
     [fm removeItemAtPath:[lib stringByAppendingPathComponent:@"Preferences"] error:nil];
-    [fm createDirectoryAtPath:doc intermediateDirectories:YES attributes:nil error:nil];
+    [fm createDirectoryAtPath:doc withIntermediateDirectories:YES attributes:nil error:nil];
 
     gIDFV = [[NSUUID UUID] UUIDString];
     vlog([NSString stringWithFormat:@"reset listo: %@", gIDFV]);
