@@ -1,76 +1,94 @@
-local path = DOC .. "/ref.dylib"
-local len = flen and flen(path) or 0
-local keys = {"csops", "SecCode", "CodeResources", "cryptid", "jailbreak",
-              "frida", "dyld_image", "_dyld", "mobileprovision", "TeamIdentifier",
-              "Signature", "codesign", "sysctl", "proc_pidinfo", "ptrace", "dlopen"}
-local found = {}
-local off = 0
-while off < len do
-  local chunk = fread(path, off, 65536)
-  if not chunk or #chunk == 0 then break end
-  for _, k in ipairs(keys) do
-    local c = 0
-    local i = 1
-    while true do
-      local a, b = chunk:find(k, i, true)
-      if not a then break end
-      c = c + 1
-      i = b + 1
-    end
-    if c > 0 then found[k] = (found[k] or 0) + c end
-  end
-  off = off + 65536
+-- VEEX esp
+local R, G, B = 1, 0.15, 0.15
+local s = sc()
+local vb = buf(16)
+local ready, err = false, nil
+
+local m = {}
+local function res(cls, name, argc)
+  local c = i2c_cls(cls)
+  if not c then return nil end
+  return i2c_ptr(cls, name, argc or 0)
 end
-for _, k in ipairs(keys) do log(k .. " = " .. tostring(found[k] or 0)) end
-log("FIN3")
 
-local clsPlayer = i2c_cls("Player")
-local clsCam = i2c_cls("Camera")
-local fot = i2c_ptr("Object", "FindObjectsOfType", 1)
-local gtr = i2c_ptr("Component", "get_transform", 0)
-local gpos = i2c_ptr("Transform", "get_position", 0)
-local w2s = i2c_ptr("Camera", "WorldToScreenPoint", 1)
-log("esp clsP " .. tostring(clsPlayer) .. " cam " .. tostring(clsCam) ..
-    " fot " .. tostring(fot) .. " gtr " .. tostring(gtr) ..
-    " gpos " .. tostring(gpos) .. " w2s " .. tostring(w2s))
+local function init()
+  m.giz     = res("TransformGizmo", "get_MyCamera")
+  m.w2s     = res("Camera", "WorldToScreenPoint", 1)
+  m.pw      = res("Camera", "get_pixelWidth")
+  m.ph      = res("Camera", "get_pixelHeight")
+  m.find    = res("Object", "FindObjectsOfType", 1)
+  m.player  = i2c_cls("Player")
+  m.transform = res("Component", "get_transform")
+  m.pos     = res("Transform", "get_position")
+  m.name    = res("Player", "get_NickName")
+  m.campos  = res("Transform", "get_position")
+  if not (m.giz and m.w2s and m.find and m.player and m.pos) then
+    err = "faltan metodos"
+    return false
+  end
+  return true
+end
 
-local SW, SH = 896, 414
-
-local function frame()
+function tick()
   clear()
-  if not (clsPlayer and clsCam and fot and gtr and gpos and w2s) then return -1 end
-  local carr = call(fot, clsCam)
-  local cam = arrat(carr, 0)
-  if cam == 0 then return -2 end
-  local arr = call(fot, clsPlayer)
+  if not ready then
+    if not init() then
+      text("VEEX: " .. (err or "init"), 20, 120, 1, 0.3, 0.3, 1)
+      return
+    end
+    ready = true
+    log("esp listo")
+  end
+  if not get("esp") then return end
+
+  local cam = call(m.giz, 0)
+  if not cam or cam == 0 then return end
+  local cw = call(m.pw, cam)
+  local ch = call(m.ph, cam)
+  if not cw or cw == 0 then return end
+
+  local arr = callv(m.find, 0, m.player)
+  if not arr or arr == 0 then return end
   local n = arrlen(arr)
-  local d = 0
-  for i = 0, math.min(n - 1, 40) do
-    if d >= 18 then break end
+  if n > 100 then n = 100 end
+
+  for i = 0, n - 1 do
     local p = arrat(arr, i)
     if p and p ~= 0 then
-      local tr = call(gtr, p)
+      local tr = call(m.transform, p)
       if tr and tr ~= 0 then
-        local px, py, pz = callv(gpos, tr)
-        local hx, hy, hz = callv3(w2s, cam, px, py, pz + 1.6)
-        local fx, fy, fz = callv3(w2s, cam, px, py, pz)
-        if fz > 0 and hz > 0 and fx > 0 and fy > 0 and fx < SW and fy < SH then
-          local h = fy - hy
-          if h > 6 and h < 420 then
-            local w = h * 0.42
-            text(hx - w / 2, hy, "________", 0x00FF00FF, 12)
-            text(hx - w / 2, fy, "________", 0x00FF00FF, 12)
-            d = d + 1
+        local vp = call(m.pos, tr)
+        if vp and vp ~= 0 then
+          local x = rv3(vp)
+          local y = rv3 and 0
+          local px, py, pz = rv3(vp)
+          wv3(vb, px, py + 1.55, pz)
+          local sp = callv(m.w2s, cam, vb)
+          if sp and sp ~= 0 then
+            local sx, sy, sz = rv3(sp)
+            if sz > 0 then
+              local ax = sx / s
+              local ay = sy / s
+              local h = math.max(28, 1400 / math.max(sz, 1))
+              local w = h * 0.52
+              if get("box") then
+                rect(ax - w / 2, ay - h, w, h, R, G, B, 1)
+              end
+              if get("line") then
+                line(cw / s / 2, ch / s, ax, ay, R, G, B, 1)
+              end
+              if get("name") and m.name then
+                local np = call(m.name, p)
+                local nm = np and np ~= 0 and str(np) or "?"
+                text(nm, ax - w / 2, ay - h - 13, R, G, B, 1)
+              end
+              if get("dist") then
+                text(string.format("%dm", math.floor(sz)), ax - w / 2, ay + 2, 1, 1, 1, 1)
+              end
+            end
           end
         end
       end
     end
   end
-  return d
-end
-
-while true do
-  local d = frame()
-  text(40, 384, "d=" .. tostring(d), 0xFFFFFFFF, 11)
-  msleep(120)
 end
