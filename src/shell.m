@@ -46,8 +46,8 @@ static void vlog(NSString *s) {
     dispatch_async(dispatch_get_main_queue(), ^{
         if (!gLogView) return;
         gLogView.text = [gLogView.text stringByAppendingFormat:@"%@\n", s];
-        if (gLogView.text.length > 6000)
-            gLogView.text = [gLogView.text substringFromIndex:gLogView.text.length - 6000];
+        if (gLogView.text.length > 20000)
+            gLogView.text = [gLogView.text substringFromIndex:gLogView.text.length - 20000];
         [gLogView scrollRangeToVisible:NSMakeRange(gLogView.text.length, 0)];
     });
 }
@@ -109,6 +109,12 @@ static void vxResetGuest(void) {
 - (void)vxDoTap { gOpen = !gOpen; gPanel.hidden = !gOpen; }
 - (void)vxDoReset { vxResetGuest(); }
 - (void)vxDoTab { gTab = (int)self.tag; vxBuildTab(); }
+- (void)vxDoCopy {
+    UIPasteboard.generalPasteboard.string = gLogView.text ?: @"";
+    self.backgroundColor = [UIColor colorWithWhite:0.11 alpha:1];
+    [self setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
+}
+- (void)vxDoClear { gLogView.text = @""; }
 @end
 
 static void vxI2CInit(void) {
@@ -462,10 +468,20 @@ static void buildUI(UIWindowScene *sc) {
     blur.frame = gPanel.bounds;
     [gPanel addSubview:blur];
 
-    UILabel *t = [[UILabel alloc] initWithFrame:CGRectMake(16, 8, 200, 24)];
+    UILabel *t = [[UILabel alloc] initWithFrame:CGRectMake(16, 8, 120, 24)];
     t.text = @"VEEX"; t.font = [UIFont boldSystemFontOfSize:15];
     t.textColor = [UIColor colorWithWhite:0.1 alpha:1];
     [gPanel addSubview:t];
+
+    UIButton *cp = [UIButton buttonWithType:UIButtonTypeSystem];
+    cp.frame = CGRectMake(232, 8, 56, 24);
+    cp.backgroundColor = [UIColor colorWithWhite:1 alpha:0.7];
+    cp.layer.cornerRadius = 12;
+    cp.titleLabel.font = [UIFont boldSystemFontOfSize:9];
+    [cp setTitle:@"COPIAR" forState:UIControlStateNormal];
+    [cp setTitleColor:[UIColor colorWithWhite:0.1 alpha:1] forState:UIControlStateNormal];
+    [cp addTarget:cp action:@selector(vxDoCopy) forControlEvents:UIControlEventTouchUpInside];
+    [gPanel addSubview:cp];
 
     gTabBtns = [NSMutableArray array];
     for (int i = 0; i < 5; i++) {
