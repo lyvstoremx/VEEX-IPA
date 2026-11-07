@@ -1,9 +1,10 @@
--- VEEX esp (diagnostico de resolucion)
+log("VEEX v2 cargado")
 local R, G, B = 1, 0.15, 0.15
 local s = sc()
 local vb = buf(16)
 local M = {}
-local tried, ok, frames = false, false, 0
+local ok = false
+local frames = 0
 
 local function try(cls, name, argc)
   local c = i2c_cls(cls)
@@ -29,15 +30,14 @@ local function resolve()
   log(ok and "RES OK" or "RES INCOMPLETO")
 end
 
+resolve()
+
 function tick()
   clear()
   frames = frames + 1
   if not ok then
-    if (not tried) or (frames % 120 == 0) then
-      tried = true
-      resolve()
-    end
-    text("VEEX", 20, 130, 1, 1, 1, 1)
+    if frames % 180 == 0 then resolve() end
+    text("VEEX v2", 20, 130, 1, 1, 1, 1)
     return
   end
   if not get("esp") then return end
