@@ -14,16 +14,20 @@
 
 static UIWindow *gWin; static UIView *gRoot;
 static UIButton *gBtn; static UIView *gPanel; static UITextView *gLogView;
+static UIView *gContent; static NSMutableArray *gTabBtns;
 static UILabel *gLbl[MAXLBL]; static int gUsed;
 static lua_State *gL; static NSString *gDocs;
-static CGRect gBtnR, gPanelR; static int gOpen;
+static CGRect gBtnR, gPanelR; static int gOpen; static int gTab;
 static NSString *gIDFV;
 static uint64_t gBase, gSize;
+static NSMutableDictionary *gCfg;
 
 static void vxResetGuest(void);
+static void vxBuildTab(void);
 
 static void vlog(NSString *s) {
     dispatch_async(dispatch_get_main_queue(), ^{
+        if (!gLogView) return;
         gLogView.text = [gLogView.text stringByAppendingFormat:@"%@\n", s];
         if (gLogView.text.length > 6000)
             gLogView.text = [gLogView.text substringFromIndex:gLogView.text.length - 6000];
@@ -87,7 +91,14 @@ static void vxResetGuest(void) {
 @implementation UIButton (VX)
 - (void)vxDoTap { gOpen = !gOpen; gPanel.hidden = !gOpen; }
 - (void)vxDoReset { vxResetGuest(); }
+- (void)vxDoTab { gTab = (int)self.tag; vxBuildTab(); }
 @end
+
+static int l_cfg(lua_State *L) {
+    id v = gCfg[[NSString stringWithUTF8String:luaL_checkstring(L,1)]];
+    if (v) lua_pushnumber(L, [v doubleValue]); else lua_pushnil(L);
+    return 1;
+}
 
 static int l_rd(lua_State *L) {
     uint64_t a = (uint64_t)luaL_checkinteger(L,1); size_t n = (size_t)luaL_checkinteger(L,2);
@@ -142,18 +153,21 @@ static int l_scan(lua_State *L) {
 static int l_log(lua_State *L) { vlog([NSString stringWithUTF8String:luaL_checkstring(L,1)]); return 0; }
 static int l_sleep(lua_State *L) { usleep((useconds_t)(luaL_checknumber(L,1)*1000)); return 0; }
 
-static void drawAt(float x, float y, NSString *s, float sz) {
+static void drawAt(float x, float y, NSString *s, float sz, uint32_t col) {
     if (gUsed >= MAXLBL) return;
     UILabel *l = gLbl[gUsed++];
-    l.frame = CGRectMake(x, y, 320, sz + 4); l.text = s;
+    l.frame = CGRectMake(x, y, 340, sz + 4); l.text = s;
     l.font = [UIFont boldSystemFontOfSize:sz];
-    l.textColor = UIColor.greenColor; l.hidden = NO;
+    l.textColor = [UIColor colorWithRed:((col>>24)&255)/255.0 green:((col>>16)&255)/255.0
+                                   blue:((col>>8)&255)/255.0 alpha:(col&255)/255.0];
+    l.hidden = NO;
 }
 static int l_text(lua_State *L) {
     float x = luaL_checknumber(L,1), y = luaL_checknumber(L,2);
     NSString *s = [NSString stringWithUTF8String:luaL_checkstring(L,3)];
-    float sz = (float)luaL_optnumber(L,4,13);
-    dispatch_async(dispatch_get_main_queue(), ^{ drawAt(x,y,s,sz); });
+    uint32_t c = (uint32_t)luaL_optinteger(L,4,0x00FF00FF);
+    float sz = (float)luaL_optnumber(L,5,13);
+    dispatch_async(dispatch_get_main_queue(), ^{ drawAt(x,y,s,sz,c); });
     return 0;
 }
 static int l_clear(lua_State *L) {
@@ -175,7 +189,7 @@ static void runScript(void) {
     lua_register(gL, "rd", l_rd); lua_register(gL, "r32", l_r32);
     lua_register(gL, "r64", l_r64); lua_register(gL, "rf", l_rf);
     lua_register(gL, "w32", l_w32); lua_register(gL, "wf", l_wf);
-    lua_register(gL, "scan", l_scan);
+    lua_register(gL, "scan", l_scan); lua_register(gL, "cfg", l_cfg);
     lua_pushinteger(gL, gBase); lua_setglobal(gL, "BASE");
     lua_pushinteger(gL, gSize); lua_setglobal(gL, "SIZE");
     if (luaL_dofile(gL, path.UTF8String) != LUA_OK) {
@@ -204,7 +218,86 @@ static void vxFindImage(void) {
     }
 }
 
+static const char *kTabs[] = { "ESP", "AIM", "DRAW", "MISC", "SET" };
+
+@interface VXRow : UIButton @end
+@implementation VXRow
+- (void)vxFlip {
+    NSString *k = (NSString *)objc_getAssociatedObject(self, "k");
+    BOOL on = ![gCfg[k] boolValue];
+    gCfg[k] = @(on);
+    self.backgroundColor = on ? [UIColor colorWithWhite:0.11 alpha:1] : [UIColor colorWithWhite:1 alpha:0.55];
+    [self setTitleColor:on ? UIColor.whiteColor : [UIColor colorWithWhite:0.11 alpha:1] forState:UIControlStateNormal];
+}
+@end
+
+static void addRow(NSString *title, NSString *key, CGFloat y) {
+    VXRow *b = [VXRow buttonWithType:UIButtonTypeSystem];
+    b.frame = CGRectMake(8, y, 250, 34);
+    b.backgroundColor = [UIColor colorWithWhite:1 alpha:0.55];
+    b.layer.cornerRadius = 17;
+    b.contentHorizontalAlignment = UIControlContentHorizontalAlignmentLeft;
+    b.titleEdgeInsets = UIEdgeInsetsMake(0, 16, 0, 0);
+    b.titleLabel.font = [UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
+    [b setTitle:title forState:UIControlStateNormal];
+    [b setTitleColor:[UIColor colorWithWhite:0.11 alpha:1] forState:UIControlStateNormal];
+    objc_setAssociatedObject(b, "k", key, OBJC_ASSOCIATION_RETAIN);
+    [b addTarget:b action:@selector(vxFlip) forControlEvents:UIControlEventTouchUpInside];
+    [gContent addSubview:b];
+}
+
+static void vxBuildTab(void) {
+    for (UIView *v in gContent.subviews) [v removeFromSuperview];
+    for (int i = 0; i < 5; i++) {
+        UIButton *t = gTabBtns[i];
+        BOOL on = (i == gTab);
+        t.backgroundColor = on ? [UIColor colorWithWhite:0.11 alpha:1] : [UIColor colorWithWhite:1 alpha:0.6];
+        [t setTitleColor:on ? UIColor.whiteColor : [UIColor colorWithWhite:0.11 alpha:1] forState:UIControlStateNormal];
+    }
+    CGFloat y = 4;
+    if (gTab == 0) {
+        addRow(@"ESP master", @"esp.on", y); y += 38;
+        addRow(@"Cajas", @"esp.box", y); y += 38;
+        addRow(@"Nombres", @"esp.name", y); y += 38;
+        addRow(@"Distancia", @"esp.dist", y);
+    } else if (gTab == 1) {
+        addRow(@"Aimbot", @"aim.on", y); y += 38;
+        addRow(@"Predicción", @"aim.pred", y); y += 38;
+        addRow(@"Humanizar", @"aim.human", y); y += 38;
+        addRow(@"Triggerbot", @"aim.trigger", y);
+    } else if (gTab == 2) {
+        addRow(@"Salud", @"draw.hp", y); y += 38;
+        addRow(@"Arma", @"draw.wpn", y); y += 38;
+        addRow(@"Líneas", @"draw.line", y); y += 38;
+        addRow(@"Esqueleto", @"draw.skel", y);
+    } else if (gTab == 3) {
+        addRow(@"Contador FPS", @"misc.fps", y); y += 38;
+        addRow(@"Ocultar en lobby", @"misc.hide", y); y += 38;
+        addRow(@"Anti-captura", @"misc.anti", y);
+    } else {
+        addRow(@"RESET GUEST", @"set.reset", y); y += 38;
+        addRow(@"Recargar script", @"set.reload", y);
+    }
+    for (UIView *v in gContent.subviews) {
+        if ([v isKindOfClass:[VXRow class]]) {
+            VXRow *r = (VXRow *)v;
+            NSString *k = (NSString *)objc_getAssociatedObject(r, "k");
+            BOOL on = [gCfg[k] boolValue];
+            r.backgroundColor = on ? [UIColor colorWithWhite:0.11 alpha:1] : [UIColor colorWithWhite:1 alpha:0.55];
+            [r setTitleColor:on ? UIColor.whiteColor : [UIColor colorWithWhite:0.11 alpha:1] forState:UIControlStateNormal];
+        }
+    }
+}
+
 static void buildUI(UIWindowScene *sc) {
+    gCfg = [NSMutableDictionary dictionary];
+    gCfg[@"esp.on"] = @NO; gCfg[@"esp.box"] = @YES; gCfg[@"esp.name"] = @NO;
+    gCfg[@"esp.dist"] = @YES; gCfg[@"aim.on"] = @NO; gCfg[@"aim.pred"] = @YES;
+    gCfg[@"aim.human"] = @YES; gCfg[@"aim.trigger"] = @NO;
+    gCfg[@"draw.hp"] = @NO; gCfg[@"draw.wpn"] = @NO; gCfg[@"draw.line"] = @NO;
+    gCfg[@"draw.skel"] = @NO; gCfg[@"misc.fps"] = @NO; gCfg[@"misc.hide"] = @NO;
+    gCfg[@"misc.anti"] = @NO;
+
     gWin = [[UIWindow alloc] initWithWindowScene:sc];
     gWin.frame = sc.coordinateSpace.bounds;
     gWin.windowLevel = UIWindowLevelAlert + 1;
@@ -219,7 +312,7 @@ static void buildUI(UIWindowScene *sc) {
     gBtnR = CGRectMake(14, 70, 46, 46);
     gBtn = [UIButton buttonWithType:UIButtonTypeSystem];
     gBtn.frame = gBtnR;
-    gBtn.backgroundColor = [UIColor colorWithWhite:1 alpha:0.75];
+    gBtn.backgroundColor = [UIColor colorWithWhite:1 alpha:0.8];
     gBtn.layer.cornerRadius = 23;
     gBtn.titleLabel.font = [UIFont boldSystemFontOfSize:16];
     [gBtn setTitle:@"VX" forState:UIControlStateNormal];
@@ -227,34 +320,46 @@ static void buildUI(UIWindowScene *sc) {
     [gBtn addTarget:gBtn action:@selector(vxDoTap) forControlEvents:UIControlEventTouchUpInside];
     [gRoot addSubview:gBtn];
 
-    gPanelR = CGRectMake(14, 124, 340, 250);
+    gPanelR = CGRectMake(14, 108, 300, 296);
     gPanel = [[UIView alloc] initWithFrame:gPanelR];
-    gPanel.backgroundColor = [UIColor colorWithWhite:1 alpha:0.85];
-    gPanel.layer.cornerRadius = 18; gPanel.hidden = YES; gPanel.clipsToBounds = YES;
+    gPanel.layer.cornerRadius = 20; gPanel.hidden = YES; gPanel.clipsToBounds = YES;
     [gRoot addSubview:gPanel];
 
-    UILabel *t = [[UILabel alloc] initWithFrame:CGRectMake(16, 10, 220, 26)];
-    t.text = @"VEEX 1.0"; t.font = [UIFont boldSystemFontOfSize:15];
+    UIVisualEffectView *blur = [[UIVisualEffectView alloc] initWithEffect:
+        [UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemUltraThinMaterialLight]];
+    blur.frame = gPanel.bounds;
+    [gPanel addSubview:blur];
+
+    UILabel *t = [[UILabel alloc] initWithFrame:CGRectMake(16, 8, 200, 24)];
+    t.text = @"VEEX"; t.font = [UIFont boldSystemFontOfSize:15];
     t.textColor = [UIColor colorWithWhite:0.1 alpha:1];
     [gPanel addSubview:t];
 
-    UIButton *rst = [UIButton buttonWithType:UIButtonTypeSystem];
-    rst.frame = CGRectMake(16, 40, 140, 32);
-    rst.backgroundColor = [UIColor colorWithRed:0.9 green:0.25 blue:0.25 alpha:1];
-    rst.layer.cornerRadius = 16;
-    rst.titleLabel.font = [UIFont boldSystemFontOfSize:12];
-    [rst setTitle:@"RESET GUEST" forState:UIControlStateNormal];
-    [rst setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
-    [rst addTarget:rst action:@selector(vxDoReset) forControlEvents:UIControlEventTouchUpInside];
-    [gPanel addSubview:rst];
+    gTabBtns = [NSMutableArray array];
+    for (int i = 0; i < 5; i++) {
+        UIButton *tb = [UIButton buttonWithType:UIButtonTypeSystem];
+        tb.frame = CGRectMake(16 + i * 54, 34, 50, 26);
+        tb.layer.cornerRadius = 13;
+        tb.tag = i;
+        tb.titleLabel.font = [UIFont boldSystemFontOfSize:10];
+        [tb setTitle:[NSString stringWithUTF8String:kTabs[i]] forState:UIControlStateNormal];
+        [tb addTarget:tb action:@selector(vxDoTab) forControlEvents:UIControlEventTouchUpInside];
+        [gPanel addSubview:tb];
+        [gTabBtns addObject:tb];
+    }
 
-    gLogView = [[UITextView alloc] initWithFrame:CGRectMake(12, 80, 316, 158)];
-    gLogView.backgroundColor = [UIColor colorWithWhite:0.96 alpha:1];
+    gContent = [[UIView alloc] initWithFrame:CGRectMake(8, 64, 284, 150)];
+    [gPanel addSubview:gContent];
+
+    gLogView = [[UITextView alloc] initWithFrame:CGRectMake(10, 218, 280, 68)];
+    gLogView.backgroundColor = [UIColor colorWithWhite:0.97 alpha:0.9];
     gLogView.layer.cornerRadius = 10; gLogView.editable = NO;
-    gLogView.font = [UIFont monospacedSystemFontOfSize:10 weight:UIFontWeightRegular];
+    gLogView.font = [UIFont monospacedSystemFontOfSize:9 weight:UIFontWeightRegular];
     gLogView.textColor = UIColor.blackColor;
     [gPanel addSubview:gLogView];
 
+    gTab = 0;
+    vxBuildTab();
     gWin.hidden = NO;
 }
 
@@ -270,7 +375,6 @@ static void boot(int tries) {
             return;
         }
         gDocs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
-
         vxFindImage();
         buildUI(sc);
         vxPatchCryptid();
