@@ -1,4 +1,4 @@
-log("VEEX v26")
+log("VEEX v26b")
 
 local function pickmax(name)
   local best, bn = nil, -1
@@ -13,7 +13,7 @@ local P = pickmax("Player")
 local C = pickmax("Camera")
 local O = nil
 for _, c in ipairs(i2c_clsall("Object")) do
-  for _, m in i2c_mnames(c) do
+  for _, m in ipairs(i2c_mnames(c)) do
     if m == "FindObjectsOfType" then O = c break end
   end
   if O then break end
@@ -21,7 +21,6 @@ end
 
 local fot = O and i2c_mptr(O, "FindObjectsOfType", 1)
 local gtr = P and i2c_mptr(P, "get_transform", 0)
-local vb = buf(16)
 local tp = P and clstype(P)
 local tc = C and clstype(C)
 local done = false
