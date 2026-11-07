@@ -37,7 +37,7 @@ function tick()
   frames = frames + 1
   if not ok then
     if frames % 180 == 0 then resolve() end
-    text("VEEX v2", 20, 130, 1, 1, 1, 1)
+    text("VEEX v2", 70, 105, 1, 1, 1, 1)
     return
   end
   if not get("esp") then return end
