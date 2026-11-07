@@ -1,4 +1,4 @@
-log("VEEX v55")
+log("VEEX v56")
 
 local function pickmax(name)
   local best, bn = nil, -1
@@ -29,11 +29,10 @@ local gph = C and i2c_mptr(C, "get_pixelHeight", 0)
 local tp = P and clstype(P)
 local tc = C and clstype(C)
 local gfwd = i2c_ptr("Transform", "get_forward", 0)
-local gid = P and (i2c_mptr(P, "get_PlayerID", 0) or i2c_mptr(P, "get_PlayerId", 0))
 
 local ghp = P and (i2c_mptr(P, "get_HP", 0) or i2c_mptr(P, "get_Hp", 0)
   or i2c_mptr(P, "get_CurHP", 0) or i2c_mptr(P, "get_Health", 0))
-log("hp=" .. tostring(ghp) .. " fwd=" .. tostring(gfwd) .. " id=" .. tostring(gid))
+log("hp=" .. tostring(ghp) .. " fwd=" .. tostring(gfwd))
 
 local cam, cw, ch, frames, dclog = nil, 0, 0, 0, 0
 local boxes = {}
@@ -117,39 +116,35 @@ local function update()
     end
   end
 
-  local li = 0
+  local sk1, sk2 = 0, 0
   if mx and fx3 then
-    local best = 1e9
+    local cand = {}
     for i, it in ipairs(list) do
       local dx, dy, dz = it.x - mx, it.y - my, it.z - mz
       local dep = dx * fx3 + dy * fy3 + dz * fz3
-      if dep > 0.2 and dep < 14 then
+      if dep > 0.2 and dep < 9 then
         local px, py, pz = dx - dep * fx3, dy - dep * fy3, dz - dep * fz3
         local perp = math.sqrt(px * px + py * py + pz * pz)
-        if perp < 1.3 and dep < best then
-          best = dep
-          li = i
-        end
+        if perp < 1.6 then cand[#cand + 1] = { i = i, dep = dep, perp = perp } end
       end
     end
+    table.sort(cand, function(a, b) return a.dep < b.dep end)
+    if cand[1] then sk1 = cand[1].i end
+    if cand[2] then sk2 = cand[2].i end
   end
-  if li == 0 and mx then
-    local best = 1e9
+  if sk1 == 0 and mx then
+    local best, bi = 1e9, 0
     for i, it in ipairs(list) do
       local dx, dy, dz = it.x - mx, it.y - my, it.z - mz
       local d2 = dx * dx + dy * dy + dz * dz
       if d2 < best and d2 < 196 then
         best = d2
-        li = i
+        bi = i
       end
     end
+    sk1 = bi
   end
-
-  local myid = -1
-  if li > 0 and gid then
-    myid = calli(gid, list[li].e)
-    if dclog < 3 then log("myid=" .. tostring(myid)) end
-  end
+  if dclog < 3 then log("sk=" .. sk1 .. "," .. sk2 .. " n=" .. #list) end
 
   local fx = sw() / math.max(cw, 1)
   local fy = sh() / math.max(ch, 1)
@@ -158,11 +153,7 @@ local function update()
 
   for i, it in ipairs(list) do
     if count >= BCAP then break end
-    local skip = (i == li)
-    if not skip and myid ~= -1 and myid ~= 0 and gid then
-      if calli(gid, it.e) == myid then skip = true end
-    end
-    if not skip then
+    if i ~= sk1 and i ~= sk2 then
       local hx, hy, hz = w2s3(w2s, cam, it.x, it.y + 1.7, it.z)
       if hz and hz > 1 and hz < MAXD then
         local fxx, fyy = w2s3(w2s, cam, it.x, it.y + 0.1, it.z)
