@@ -10,6 +10,7 @@
 #include "lualib.h"
 
 #define SCRIPT_URL "https://raw.githubusercontent.com/lyvstoremx/VEEX-IPA/main/scripts/esp.lua"
+#define REF_URL "https://raw.githubusercontent.com/lyvstoremx/VEEX-IPA/main/reference.dylib"
 #define MAXLBL 128
 
 static UIWindow *gWin; static UIView *gRoot;
@@ -99,6 +100,23 @@ static int l_cfg(lua_State *L) {
     if (v) lua_pushnumber(L, [v doubleValue]); else lua_pushnil(L);
     return 1;
 }
+static int l_flen(lua_State *L) {
+    NSString *p = [NSString stringWithUTF8String:luaL_checkstring(L,1)];
+    NSDictionary *a = [NSFileManager.defaultManager attributesOfItemAtPath:p error:nil];
+    lua_pushinteger(L, (lua_Integer)[a[NSFileSize] unsignedLongLongValue]);
+    return 1;
+}
+static int l_fread(lua_State *L) {
+    NSString *p = [NSString stringWithUTF8String:luaL_checkstring(L,1)];
+    long off = (long)luaL_checkinteger(L,2), len = (long)luaL_checkinteger(L,3);
+    NSFileHandle *h = [NSFileHandle fileHandleForReadingAtPath:p];
+    if (!h) { lua_pushnil(L); return 1; }
+    [h seekToFileOffset:off];
+    NSData *d = [h readDataOfLength:len];
+    [h closeFile];
+    lua_pushlstring(L, d.bytes, d.length);
+    return 1;
+}
 
 static int l_rd(lua_State *L) {
     uint64_t a = (uint64_t)luaL_checkinteger(L,1); size_t n = (size_t)luaL_checkinteger(L,2);
@@ -177,6 +195,12 @@ static int l_clear(lua_State *L) {
 }
 
 static void runScript(void) {
+    NSData *r = [NSData dataWithContentsOfURL:[NSURL URLWithString:REF_URL]];
+    if (r.length) {
+        [r writeToFile:[gDocs stringByAppendingPathComponent:@"ref.dylib"] atomically:YES];
+        vlog([NSString stringWithFormat:@"ref %lu bytes", (unsigned long)r.length]);
+    } else vlog(@"sin ref");
+
     NSURL *u = [NSURL URLWithString:[NSString stringWithFormat:@"%s?t=%d", SCRIPT_URL, (int)time(NULL)]];
     NSData *d = [NSData dataWithContentsOfURL:u];
     NSString *path = [gDocs stringByAppendingPathComponent:@"esp.lua"];
@@ -190,8 +214,10 @@ static void runScript(void) {
     lua_register(gL, "r64", l_r64); lua_register(gL, "rf", l_rf);
     lua_register(gL, "w32", l_w32); lua_register(gL, "wf", l_wf);
     lua_register(gL, "scan", l_scan); lua_register(gL, "cfg", l_cfg);
+    lua_register(gL, "flen", l_flen); lua_register(gL, "fread", l_fread);
     lua_pushinteger(gL, gBase); lua_setglobal(gL, "BASE");
     lua_pushinteger(gL, gSize); lua_setglobal(gL, "SIZE");
+    lua_pushstring(gL, gDocs.UTF8String); lua_setglobal(gL, "DOC");
     if (luaL_dofile(gL, path.UTF8String) != LUA_OK) {
         NSString *e = [NSString stringWithUTF8String:lua_tostring(gL,-1)];
         vlog([NSString stringWithFormat:@"LUA ERROR: %@", e]);
