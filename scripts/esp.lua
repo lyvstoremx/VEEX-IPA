@@ -1,4 +1,4 @@
-log("VEEX v51")
+log("VEEX v52")
 
 local function pickmax(name)
   local best, bn = nil, -1
@@ -28,32 +28,25 @@ local gpw = C and i2c_mptr(C, "get_pixelWidth", 0)
 local gph = C and i2c_mptr(C, "get_pixelHeight", 0)
 local tp = P and clstype(P)
 local tc = C and clstype(C)
+local gpar = i2c_ptr("Transform", "get_parent", 0)
 
 local ghp = P and (i2c_mptr(P, "get_HP", 0) or i2c_mptr(P, "get_Hp", 0)
   or i2c_mptr(P, "get_CurHP", 0) or i2c_mptr(P, "get_Health", 0))
-log("hp=" .. tostring(ghp))
+log("hp=" .. tostring(ghp) .. " par=" .. tostring(gpar))
 
-local cam, cw, ch, frames, hplog, dclog = nil, 0, 0, 0, 0, 0
+local cam, cw, ch, frames, dclog = nil, 0, 0, 0, 0
 local boxes = {}
 
 local MAXHP = 200
 local MAXD  = 300
-local NAMED = 30
-local ME    = 2.0
+local NAMED = 25
+local ME    = 4.0
 local NCAP  = 80
 local BCAP  = 60
 
 local function kl(p)
   if not p or p == 0 then return 0 end
   return r32(p + 4) * 4294967296 + r32(p)
-end
-
-local function worldPos(e)
-  local tr = call(gtr, e)
-  if not tr or tr == 0 then return nil end
-  local gp = i2c_mptr(kl(tr), "get_position", 0)
-  if not gp then return nil end
-  return pos3(gp, tr)
 end
 
 local function pickCam()
@@ -89,8 +82,20 @@ local function update()
     if not cam or cw == 0 or ch == 0 then return end
   end
 
+  local anc = {}
+  local k = 0
+  if gpar then
+    local t = call(gtr, cam)
+    while t and t ~= 0 and k < 6 do
+      t = call(gpar, t)
+      if not t or t == 0 then break end
+      anc[t] = true
+      k = k + 1
+    end
+  end
+  if dclog == 0 then log("ancn=" .. k) end
+
   local mx, my, mz = camPos()
-  if dclog == 0 then log("campos=" .. tostring(mx)) end
 
   local arr = callv(fot, 0, tp)
   if not arr or arr == 0 then return end
@@ -106,40 +111,46 @@ local function update()
     if count >= BCAP then break end
     local e = arrat(arr, i)
     if e and e ~= 0 then
-      local x, y, z = worldPos(e)
-      if x then
-        if mx and dclog < 5 then
-          local dx, dy, dz = x - mx, y - my, z - mz
-          local dc = math.sqrt(dx * dx + dy * dy + dz * dz)
-          log("dc=" .. string.format("%.2f", dc))
-          dclog = dclog + 1
-        end
-        local skip = false
-        if mx then
-          local dx, dy, dz = x - mx, y - my, z - mz
-          if dx * dx + dy * dy + dz * dz < ME * ME then skip = true end
+      local tr = call(gtr, e)
+      if tr and tr ~= 0 then
+        local skip = anc[tr] and true or false
+        if not skip and mx then
+          local gp = i2c_mptr(kl(tr), "get_position", 0)
+          if gp then
+            local x, y, z = pos3(gp, tr)
+            if x then
+              local dx, dy, dz = x - mx, y - my, z - mz
+              if dx * dx + dy * dy + dz * dz < ME * ME then skip = true end
+            end
+          end
         end
         if not skip then
-          local hx, hy, hz = w2s3(w2s, cam, x, y + 1.7, z)
-          if hz and hz > 1 and hz < MAXD then
-            local fxx, fyy = w2s3(w2s, cam, x, y + 0.1, z)
-            local cx = ((hx + fxx) / 2) * fx
-            local ay1 = H - hy * fy
-            local ay2 = H - fyy * fy
-            local h = ay2 - ay1
-            if h > 4 and cx > 0 and cx < W and ay1 > 0 and ay1 < H then
-              local nm, hp = nil, nil
-              if gnk and hz < NAMED then
-                local np = call(gnk, e)
-                if np and np ~= 0 then nm = str(np) end
+          local gp = i2c_mptr(kl(tr), "get_position", 0)
+          if gp then
+            local x, y, z = pos3(gp, tr)
+            if x then
+              local hx, hy, hz = w2s3(w2s, cam, x, y + 1.7, z)
+              if hz and hz > 1 and hz < MAXD then
+                local fxx, fyy = w2s3(w2s, cam, x, y + 0.1, z)
+                local cx = ((hx + fxx) / 2) * fx
+                local ay1 = H - hy * fy
+                local ay2 = H - fyy * fy
+                local h = ay2 - ay1
+                if h > 4 and cx > 0 and cx < W and ay1 > 0 and ay1 < H then
+                  local nm, hp = nil, nil
+                  if gnk and hz < NAMED then
+                    local np = call(gnk, e)
+                    if np and np ~= 0 then nm = str(np) end
+                  end
+                  if ghp then
+                    hp = calli(ghp, e)
+                    if hp and hp > MAXHP then hp = MAXHP end
+                    if hp and hp < 0 then hp = 0 end
+                  end
+                  boxes[#boxes + 1] = { cx = cx, y1 = ay1, h = h, d = hz, nm = nm, hp = hp }
+                  count = count + 1
+                end
               end
-              if ghp then
-                hp = calli(ghp, e)
-                if hp and hp > MAXHP then hp = MAXHP end
-                if hp and hp < 0 then hp = 0 end
-              end
-              boxes[#boxes + 1] = { cx = cx, y1 = ay1, h = h, d = hz, nm = nm, hp = hp }
-              count = count + 1
             end
           end
         end
@@ -147,6 +158,7 @@ local function update()
     end
   end
 
+  dclog = dclog + 1
   table.sort(boxes, function(a, b) return a.d > b.d end)
 end
 
@@ -167,7 +179,7 @@ function tick()
 
   for i, b in ipairs(boxes) do
     local w = b.h * 0.45
-    local near = i > n - 6
+    local near = i > n - 5
     if get("line") then line(W / 2, 0, b.cx, b.y1, 1, 1, 1, 0.5) end
     if get("box") then rect(b.cx - w / 2, b.y1, w, b.h, 1, 0.2, 0.2, 1) end
     if b.hp and get("hp") then
