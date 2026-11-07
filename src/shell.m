@@ -39,10 +39,14 @@ static void vlog(NSString *s) {
 
 static void vxPatchCryptid(void) {
     const struct mach_header_64 *h = (const struct mach_header_64 *)_dyld_get_image_header(0);
+    uintptr_t base = (uintptr_t)h & ~(uintptr_t)0x3FFF;
+    vm_protect(mach_task_self(), base, 0x8000, false,
+               VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY);
     uint8_t *p = (uint8_t *)h + sizeof(*h);
     for (uint32_t i = 0; i < h->ncmds; i++) {
         struct load_command *lc = (struct load_command *)p;
-        if (lc->cmd == LC_ENCRYPTION_INFO_64)
+        if (lc->cmd == LC_ENCRYPTION_INFO_64 &&
+            ((struct encryption_info_command_64 *)lc)->cryptid != 1)
             ((struct encryption_info_command_64 *)lc)->cryptid = 1;
         p += lc->cmdsize;
     }
@@ -184,13 +188,13 @@ static void boot(int tries) {
         }
         gDocs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
         buildUI(sc);
+        vxPatchCryptid();
         vlog(@"VEEX cargado");
         dispatch_async(dispatch_get_global_queue(0,0), ^{ runScript(); });
     });
 }
 
 __attribute__((constructor)) static void vxInit(void) {
-    vxPatchCryptid();
     vxInstallHooks();
     boot(60);
 }
