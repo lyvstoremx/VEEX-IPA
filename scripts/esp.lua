@@ -1,4 +1,4 @@
-log("VEEX v50")
+log("VEEX v51")
 
 local function pickmax(name)
   local best, bn = nil, -1
@@ -19,22 +19,6 @@ for _, c in ipairs(i2c_clsall("Object")) do
   if O then break end
 end
 
-local function dm(pat, max)
-  local k = 0
-  for _, m in ipairs(i2c_mnames(P)) do
-    if m:lower():find(pat) then
-      log("M " .. m)
-      k = k + 1
-      if k >= max then break end
-    end
-  end
-end
-dm("local", 10)
-dm("self", 8)
-dm("mine", 8)
-dm("hp", 15)
-dm("health", 8)
-
 local fot = O and i2c_mptr(O, "FindObjectsOfType", 1)
 local gtr = P and i2c_mptr(P, "get_transform", 0)
 local gnk = P and i2c_mptr(P, "get_NickName", 0)
@@ -49,9 +33,10 @@ local ghp = P and (i2c_mptr(P, "get_HP", 0) or i2c_mptr(P, "get_Hp", 0)
   or i2c_mptr(P, "get_CurHP", 0) or i2c_mptr(P, "get_Health", 0))
 log("hp=" .. tostring(ghp))
 
-local cam, cw, ch, frames, hplog = nil, 0, 0, 0, 0
+local cam, cw, ch, frames, hplog, dclog = nil, 0, 0, 0, 0, 0
 local boxes = {}
 
+local MAXHP = 200
 local MAXD  = 300
 local NAMED = 30
 local ME    = 2.0
@@ -105,6 +90,7 @@ local function update()
   end
 
   local mx, my, mz = camPos()
+  if dclog == 0 then log("campos=" .. tostring(mx)) end
 
   local arr = callv(fot, 0, tp)
   if not arr or arr == 0 then return end
@@ -122,6 +108,12 @@ local function update()
     if e and e ~= 0 then
       local x, y, z = worldPos(e)
       if x then
+        if mx and dclog < 5 then
+          local dx, dy, dz = x - mx, y - my, z - mz
+          local dc = math.sqrt(dx * dx + dy * dy + dz * dz)
+          log("dc=" .. string.format("%.2f", dc))
+          dclog = dclog + 1
+        end
         local skip = false
         if mx then
           local dx, dy, dz = x - mx, y - my, z - mz
@@ -142,12 +134,8 @@ local function update()
                 if np and np ~= 0 then nm = str(np) end
               end
               if ghp then
-                hp = callf(ghp, e)
-                if hplog < 4 then
-                  log("hf=" .. tostring(hp) .. " hi=" .. tostring(calli(ghp, e)))
-                  hplog = hplog + 1
-                end
-                if hp and hp > 100 then hp = 100 end
+                hp = calli(ghp, e)
+                if hp and hp > MAXHP then hp = MAXHP end
                 if hp and hp < 0 then hp = 0 end
               end
               boxes[#boxes + 1] = { cx = cx, y1 = ay1, h = h, d = hz, nm = nm, hp = hp }
@@ -183,7 +171,7 @@ function tick()
     if get("line") then line(W / 2, 0, b.cx, b.y1, 1, 1, 1, 0.5) end
     if get("box") then rect(b.cx - w / 2, b.y1, w, b.h, 1, 0.2, 0.2, 1) end
     if b.hp and get("hp") then
-      local hh = b.h * (b.hp / 100)
+      local hh = b.h * (b.hp / MAXHP)
       if hh < 2 then hh = 2 end
       fill(b.cx - w / 2 - 6, b.y1, 3, b.h, 0, 0, 0, 0.6)
       fill(b.cx - w / 2 - 6, b.y1 + (b.h - hh), 3, hh, 0.2, 1, 0.3, 1)
