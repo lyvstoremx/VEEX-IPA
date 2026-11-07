@@ -184,6 +184,26 @@ static void runScript(void) {
     }
 }
 
+static void vxFindImage(void) {
+    const struct mach_header_64 *h = NULL;
+    uint32_t n = _dyld_image_count();
+    for (uint32_t i = 0; i < n; i++) {
+        const char *nm = _dyld_get_image_name(i);
+        if (nm && strstr(nm, "UnityFramework")) {
+            h = (const struct mach_header_64 *)_dyld_get_image_header(i);
+            vlog([NSString stringWithFormat:@"imagen: %s", nm]);
+            break;
+        }
+    }
+    if (!h) { h = (const struct mach_header_64 *)_dyld_get_image_header(0); vlog(@"imagen 0 (fallback)"); }
+    gBase = (uint64_t)h;
+    const struct segment_command_64 *sg = (const void *)(h + 1);
+    for (uint32_t i = 0; i < h->ncmds; i++) {
+        if (sg->cmd == LC_SEGMENT_64 && strcmp(sg->segname, "__TEXT") == 0) { gSize = sg->vmsize; break; }
+        sg = (const void *)((const char *)sg + sg->cmdsize);
+    }
+}
+
 static void buildUI(UIWindowScene *sc) {
     gWin = [[UIWindow alloc] initWithWindowScene:sc];
     gWin.frame = sc.coordinateSpace.bounds;
@@ -251,14 +271,7 @@ static void boot(int tries) {
         }
         gDocs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
 
-        const struct mach_header_64 *h = (const struct mach_header_64 *)_dyld_get_image_header(0);
-        gBase = (uint64_t)h + (uint64_t)_dyld_get_image_vmaddr_slide(0);
-        const struct segment_command_64 *sg = (const void *)(h + 1);
-        for (uint32_t i = 0; i < h->ncmds; i++) {
-            if (sg->cmd == LC_SEGMENT_64 && strcmp(sg->segname, "__TEXT") == 0) { gSize = sg->vmsize; break; }
-            sg = (const void *)((const char *)sg + sg->cmdsize);
-        }
-
+        vxFindImage();
         buildUI(sc);
         vxPatchCryptid();
         vlog([NSString stringWithFormat:@"VEEX cargado base=%llx size=%llx", gBase, gSize]);
