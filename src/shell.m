@@ -135,6 +135,23 @@ static void vxI2CInit(void) {
 
 static int l_i2c_ready(lua_State *L) { lua_pushboolean(L, gI2C); return 1; }
 
+static int l_i2c_cls(lua_State *L) {
+    const char *cls = luaL_checkstring(L, 1);
+    if (!gI2C) { lua_pushnil(L); return 1; }
+    size_t n = 0;
+    void **asms = (void **)p_asms(p_dom(), &n);
+    for (size_t a = 0; a < n; a++) {
+        void *img = p_img(asms[a]);
+        if (!img) continue;
+        size_t c = p_cc(img);
+        for (size_t i = 0; i < c; i++) {
+            void *kl = p_ci(img, i);
+            if (kl && !strcmp(p_cn(kl), cls)) { lua_pushinteger(L, (uint64_t)kl); return 1; }
+        }
+    }
+    lua_pushnil(L); return 1;
+}
+
 static int l_i2c_classes(lua_State *L) {
     const char *sub = luaL_checkstring(L, 1);
     lua_newtable(L);
@@ -211,6 +228,38 @@ static int l_call(lua_State *L) {
     uint64_t c = (uint64_t)luaL_optinteger(L, 4, 0);
     uint64_t d = (uint64_t)luaL_optinteger(L, 5, 0);
     lua_pushinteger(L, ((f_c4)f)(a, b, c, d));
+    return 1;
+}
+
+typedef struct { float x, y, z; } V3;
+typedef V3 (*f_gv3)(void *);
+typedef V3 (*f_w2s)(void *, V3);
+
+static int l_callv(lua_State *L) {
+    uint64_t f = (uint64_t)luaL_checkinteger(L, 1);
+    uint64_t self = (uint64_t)luaL_optinteger(L, 2, 0);
+    V3 r = ((f_gv3)f)((void *)self);
+    lua_pushnumber(L, r.x); lua_pushnumber(L, r.y); lua_pushnumber(L, r.z);
+    return 3;
+}
+static int l_callv3(lua_State *L) {
+    uint64_t f = (uint64_t)luaL_checkinteger(L, 1);
+    uint64_t self = (uint64_t)luaL_optinteger(L, 2, 0);
+    V3 a = { (float)luaL_checknumber(L, 3), (float)luaL_checknumber(L, 4), (float)luaL_checknumber(L, 5) };
+    V3 r = ((f_w2s)f)((void *)self, a);
+    lua_pushnumber(L, r.x); lua_pushnumber(L, r.y); lua_pushnumber(L, r.z);
+    return 3;
+}
+
+static int l_arrlen(lua_State *L) {
+    void *a = (void *)(uintptr_t)luaL_checkinteger(L, 1);
+    lua_pushinteger(L, a ? (lua_Integer)*(uint64_t *)((char *)a + 24) : 0);
+    return 1;
+}
+static int l_arrat(lua_State *L) {
+    void *a = (void *)(uintptr_t)luaL_checkinteger(L, 1);
+    int i = (int)luaL_checkinteger(L, 2);
+    lua_pushinteger(L, a ? (lua_Integer)*(uint64_t *)((char *)a + 32 + i * 8) : 0);
     return 1;
 }
 
@@ -334,8 +383,11 @@ static void runScript(void) {
     lua_register(gL, "w32", l_w32); lua_register(gL, "wf", l_wf);
     lua_register(gL, "scan", l_scan); lua_register(gL, "cfg", l_cfg);
     lua_register(gL, "flen", l_flen); lua_register(gL, "fread", l_fread);
-    lua_register(gL, "call", l_call);
+    lua_register(gL, "call", l_call); lua_register(gL, "callv", l_callv);
+    lua_register(gL, "callv3", l_callv3);
+    lua_register(gL, "arrlen", l_arrlen); lua_register(gL, "arrat", l_arrat);
     lua_register(gL, "i2c_ready", l_i2c_ready);
+    lua_register(gL, "i2c_cls", l_i2c_cls);
     lua_register(gL, "i2c_classes", l_i2c_classes);
     lua_register(gL, "i2c_methods", l_i2c_methods);
     lua_register(gL, "i2c_ptr", l_i2c_ptr);
