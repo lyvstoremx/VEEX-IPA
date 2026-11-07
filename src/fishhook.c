@@ -43,7 +43,7 @@ static void perform_rebinding_with_section(struct rebindings_entry *rebindings,
                                            char *strtab,
                                            uint32_t *indirect_symtab) {
   uint32_t *indirect_symbol_indices = indirect_symtab + section->reserved1;
-  void **indirect_symbol_bindings = (void **)((uintptr_t)slide + section->offset);
+  void **indirect_symbol_bindings = (void **)((uintptr_t)slide + section->addr);
 
   for (uint32_t i = 0; i < section->size / sizeof(void *); i++) {
     uint32_t symtab_index = indirect_symbol_indices[i];
@@ -80,41 +80,43 @@ int rebind_symbols_image(void *header, intptr_t slide,
   head->next = _rebindings_head;
 
   struct mach_header_64 *mh = (struct mach_header_64 *)header;
+  struct symtab_command *symtab_cmd = NULL;
+  struct dysymtab_command *dysym_cmd = NULL;
+
   struct load_command *cmd =
       (struct load_command *)((uintptr_t)mh + sizeof(struct mach_header_64));
-
   for (uint32_t i = 0; i < mh->ncmds; i++) {
-    if (cmd->cmd == LC_SYMTAB) {
-      struct symtab_command *symtab_cmd = (struct symtab_command *)cmd;
-      struct nlist_64 *symtab =
-          (struct nlist_64 *)((uintptr_t)header + symtab_cmd->symoff);
-      char *strtab = (char *)((uintptr_t)header + symtab_cmd->stroff);
-      uint32_t *indirect =
-          (uint32_t *)((uintptr_t)header + symtab_cmd->indirectsymoff);
+    if (cmd->cmd == LC_SYMTAB) symtab_cmd = (struct symtab_command *)cmd;
+    if (cmd->cmd == LC_DYSYMTAB) dysym_cmd = (struct dysymtab_command *)cmd;
+    cmd = (struct load_command *)((uintptr_t)cmd + cmd->cmdsize);
+  }
+  if (!symtab_cmd || !dysym_cmd) return 0;
 
-      struct load_command *cmd2 =
-          (struct load_command *)((uintptr_t)mh + sizeof(struct mach_header_64));
-      for (uint32_t j = 0; j < mh->ncmds; j++) {
-        if (cmd2->cmd == LC_SEGMENT_64) {
-          struct segment_command_64 *seg = (struct segment_command_64 *)cmd2;
-          if (!strcmp(seg->segname, "__DATA") ||
-              !strcmp(seg->segname, "__DATA_CONST")) {
-            struct section_64 *sect =
-                (struct section_64 *)((uintptr_t)seg + sizeof(struct segment_command_64));
-            for (uint32_t k = 0; k < seg->nsects; k++) {
-              uint32_t type = sect[k].flags & SECTION_TYPE;
-              if (type == S_LAZY_SYMBOL_POINTERS || type == S_NON_LAZY_SYMBOL_POINTERS) {
-                perform_rebinding_with_section(head, &sect[k], slide,
-                                               symtab, strtab, indirect);
-              }
-            }
+  struct nlist_64 *symtab =
+      (struct nlist_64 *)((uintptr_t)header + symtab_cmd->symoff);
+  char *strtab = (char *)((uintptr_t)header + symtab_cmd->stroff);
+  uint32_t *indirect =
+      (uint32_t *)((uintptr_t)header + dysym_cmd->indirectsymoff);
+
+  struct load_command *cmd2 =
+      (struct load_command *)((uintptr_t)mh + sizeof(struct mach_header_64));
+  for (uint32_t j = 0; j < mh->ncmds; j++) {
+    if (cmd2->cmd == LC_SEGMENT_64) {
+      struct segment_command_64 *seg = (struct segment_command_64 *)cmd2;
+      if (!strcmp(seg->segname, "__DATA") ||
+          !strcmp(seg->segname, "__DATA_CONST")) {
+        struct section_64 *sect =
+            (struct section_64 *)((uintptr_t)seg + sizeof(struct segment_command_64));
+        for (uint32_t k = 0; k < seg->nsects; k++) {
+          uint32_t type = sect[k].flags & SECTION_TYPE;
+          if (type == S_LAZY_SYMBOL_POINTERS || type == S_NON_LAZY_SYMBOL_POINTERS) {
+            perform_rebinding_with_section(head, &sect[k], slide,
+                                           symtab, strtab, indirect);
           }
         }
-        cmd2 = (struct load_command *)((uintptr_t)cmd2 + cmd2->cmdsize);
       }
-      break;
     }
-    cmd = (struct load_command *)((uintptr_t)cmd + cmd->cmdsize);
+    cmd2 = (struct load_command *)((uintptr_t)cmd2 + cmd2->cmdsize);
   }
   return 0;
 }
