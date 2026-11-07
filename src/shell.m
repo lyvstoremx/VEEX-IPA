@@ -277,6 +277,8 @@ static void *(*p_class_get_method_from_name)(void *, const char *, int) = NULL;
 static const char *(*p_method_get_name)(void *) = NULL;
 static void *(*p_class_get_methods)(void *, void **) = NULL;
 static void *(*p_runtime_invoke)(void *, void *, void **, void **) = NULL;
+static void (*p_runtime_class_init)(void *) = NULL;
+static void *(*p_thread_attach)(void *) = NULL;
 
 static void vxLoadIL2CPP(void) {
     if (gUF) return;
@@ -293,7 +295,16 @@ static void vxLoadIL2CPP(void) {
     p_method_get_name            = dlsym(gUF, "il2cpp_method_get_name");
     p_class_get_methods          = dlsym(gUF, "il2cpp_class_get_methods");
     p_runtime_invoke             = dlsym(gUF, "il2cpp_runtime_invoke");
-    vxLog(@"[VEEX] il2cpp %s", p_runtime_invoke ? "OK" : "PARCIAL");
+    p_runtime_class_init         = dlsym(gUF, "il2cpp_runtime_class_init");
+    p_thread_attach              = dlsym(gUF, "il2cpp_thread_attach");
+    vxLog(@"[VEEX] il2cpp %s init=%s attach=%s",
+          p_runtime_invoke ? "OK" : "PARCIAL",
+          p_runtime_class_init ? "si" : "no",
+          p_thread_attach ? "si" : "no");
+}
+
+static void vxInitClass(void *c) {
+    if (c && p_runtime_class_init) p_runtime_class_init(c);
 }
 
 static void *vxFindClass(const char *name) {
@@ -378,6 +389,11 @@ static int l_str(lua_State *S) {
     return 1;
 }
 
+static int l_clsinit(lua_State *S) {
+    vxInitClass(VXP(lua_tointeger(S, 1)));
+    return 0;
+}
+
 static int l_i2c_cls(lua_State *S) {
     const char *n = lua_tostring(S, 1);
     void *c = n ? vxFindClass(n) : NULL;
@@ -423,6 +439,7 @@ static int l_i2c_ptr(lua_State *S) {
     int argc = (int)lua_tointeger(S, 3);
     void *c = cn ? vxFindClass(cn) : NULL;
     if (!c) { lua_pushnil(S); return 1; }
+    vxInitClass(c);
     void *m = p_class_get_method_from_name(c, mn, argc);
     if (m) lua_pushinteger(S, (lua_Integer)(uintptr_t)m); else lua_pushnil(S);
     return 1;
@@ -473,7 +490,9 @@ static int l_i2c_mptr(lua_State *S) {
     void *c = VXP(lua_tointeger(S, 1));
     const char *mn = lua_tostring(S, 2);
     int argc = (int)lua_tointeger(S, 3);
-    void *m = (c && p_class_get_method_from_name) ? p_class_get_method_from_name(c, mn, argc) : NULL;
+    if (!c) { lua_pushnil(S); return 1; }
+    vxInitClass(c);
+    void *m = p_class_get_method_from_name ? p_class_get_method_from_name(c, mn, argc) : NULL;
     if (m) lua_pushinteger(S, (lua_Integer)(uintptr_t)m); else lua_pushnil(S);
     return 1;
 }
@@ -583,6 +602,7 @@ static void vxReg(lua_State *S) {
     lua_register(S, "sc", l_sc);
     lua_register(S, "str", l_str);
     lua_register(S, "scan", l_scan);
+    lua_register(S, "clsinit", l_clsinit);
     lua_register(S, "i2c_cls", l_i2c_cls);
     lua_register(S, "i2c_classes", l_i2c_classes);
     lua_register(S, "i2c_methods", l_i2c_methods);
@@ -640,6 +660,7 @@ void runScript(void) {
     [got writeToFile:tmp atomically:YES];
 
     dispatch_async(dispatch_get_main_queue(), ^{
+        if (p_thread_attach && p_domain_get) p_thread_attach(p_domain_get());
         if (L) { lua_close(L); L = NULL; }
         L = luaL_newstate();
         luaL_openlibs(L);
@@ -825,7 +846,7 @@ static void buildUI(void) {
     [p2 addArrangedSubview:vxRow(@"Snapline",   vxSw(@"snap", NO))];
 
     UIStackView *p3 = [[UIStackView alloc] initWithFrame:gPages[3].bounds];
-    p3.axis = UILayoutConstraintAxisVertical; p3.spacing = 6;
+    p3.axis = UILayoutConstraintAxisVertical; p3.spacing = 5;
     [gPages[3] addSubview:p3];
     [p3 addArrangedSubview:vxRow(@"Sin retroceso",  vxSw(@"norecoil", NO))];
     [p3 addArrangedSubview:vxRow(@"Sin dispersión", vxSw(@"nospread", NO))];
@@ -880,7 +901,6 @@ __attribute__((constructor)) static void vxInit(void) {
                 if (!gBase) [NSThread sleepForTimeInterval:0.5];
             }
             if (!gBase && p_domain_get) {
-                DlInfo_unused:;
                 Dl_info di;
                 if (dladdr((void *)p_domain_get, &di) && di.dli_fbase)
                     vxSetBase((const struct mach_header_64 *)di.dli_fbase);
