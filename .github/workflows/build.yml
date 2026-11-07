@@ -20,7 +20,7 @@ jobs:
         run: |
           SDK=$(xcrun --sdk iphoneos --show-sdk-path)
           mkdir -p out
-          SRC=$(ls lua-src/*.c | grep -v '/lua\.c' | grep -v '/luac\.c')
+          SRC=$(ls lua-src/*.c | grep -v '/lua\.c' | grep -v '/luac\.c' | grep -v '/onelua\.c')
           clang -dynamiclib -target arm64-apple-ios14.0 -isysroot "$SDK" -fobjc-arc -O2 \
             -Isrc -Ilua-src -install_name @rpath/veex.dylib \
             -framework Foundation -framework UIKit -framework CoreGraphics -framework QuartzCore \
