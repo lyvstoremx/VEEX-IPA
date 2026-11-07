@@ -1,5 +1,6 @@
 #import <UIKit/UIKit.h>
 #import <Security/Security.h>
+#import <objc/runtime.h>
 #import <mach-o/dyld.h>
 #import <mach-o/loader.h>
 #import <mach/mach.h>
@@ -8,7 +9,7 @@
 #include "lauxlib.h"
 #include "lualib.h"
 
-#define SCRIPT_URL "https://raw.githubusercontent.com/1yvstoremx/VEEX-IPA/main/scripts/esp.lua"
+#define SCRIPT_URL "https://raw.githubusercontent.com/lyvstoremx/VEEX-IPA/main/scripts/esp.lua"
 #define MAXLBL 128
 
 static UIWindow *gWin; static UIView *gRoot;
@@ -136,7 +137,7 @@ static void buildUI(UIWindowScene *sc) {
     gBtn.titleLabel.font = [UIFont boldSystemFontOfSize:16];
     [gBtn setTitle:@"VX" forState:UIControlStateNormal];
     [gBtn setTitleColor:[UIColor colorWithWhite:0.1 alpha:1] forState:UIControlStateNormal];
-    [gBtn addTarget:gBtn action:@selector(tap) forControlEvents:UIControlEventTouchUpInside];
+    [gBtn addTarget:gBtn action:@selector(vxTap) forControlEvents:UIControlEventTouchUpInside];
     [gRoot addSubview:gBtn];
 
     gPanelR = CGRectMake(14, 124, 340, 330);
@@ -157,7 +158,7 @@ static void buildUI(UIWindowScene *sc) {
     rst.titleLabel.font = [UIFont boldSystemFontOfSize:12];
     [rst setTitle:@"RESET GUEST" forState:UIControlStateNormal];
     [rst setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
-    [rst addTarget:rst action:@selector(tap) forControlEvents:UIControlEventTouchUpInside];
+    [rst addTarget:rst action:@selector(vxResetGuest) forControlEvents:UIControlEventTouchUpInside];
     [gPanel addSubview:rst];
 
     gLogView = [[UITextView alloc] initWithFrame:CGRectMake(12, 80, 316, 238)];
