@@ -220,25 +220,27 @@ static UIView *vxPage(void) {
 static uint64_t gBase = 0;
 static uint64_t gSize = 0;
 
+static void vxSetBase(const struct mach_header_64 *h) {
+    if (!h || gBase) return;
+    gBase = (uint64_t)h;
+    const struct load_command *lc = (const struct load_command *)(h + 1);
+    for (uint32_t k = 0; k < h->ncmds; k++) {
+        if (lc->cmd == LC_SEGMENT_64) {
+            const struct segment_command_64 *s = (const void *)lc;
+            if (!strcmp(s->segname, "__TEXT")) { gSize = s->vmsize; break; }
+        }
+        lc = (const struct load_command *)((uint8_t *)lc + lc->cmdsize);
+    }
+}
+
 static void vxFindImage(void) {
     uint32_t n = _dyld_image_count();
     for (uint32_t i = 0; i < n; i++) {
         const char *nm = _dyld_get_image_name(i);
         if (!nm || !strstr(nm, "UnityFramework")) continue;
-        const struct mach_header_64 *h = (const struct mach_header_64 *)_dyld_get_image_header(i);
-        if (!h) continue;
-        gBase = (uint64_t)h;
-        const struct load_command *lc = (const struct load_command *)(h + 1);
-        for (uint32_t k = 0; k < h->ncmds; k++) {
-            if (lc->cmd == LC_SEGMENT_64) {
-                const struct segment_command_64 *s = (const void *)lc;
-                if (!strcmp(s->segname, "__TEXT")) { gSize = s->vmsize; break; }
-            }
-            lc = (const struct load_command *)((uint8_t *)lc + lc->cmdsize);
-        }
+        vxSetBase((const struct mach_header_64 *)_dyld_get_image_header(i));
         break;
     }
-    vxLog(@"[VEEX] base=%llx size=%llx", gBase, gSize);
 }
 
 static void vxPatchCryptid(void) {
@@ -545,12 +547,30 @@ static void vxReg(lua_State *S) {
 }
 
 void runScript(void) {
-    NSString *tmp = [NSTemporaryDirectory() stringByAppendingPathComponent:@"veex_esp.lua"];
     NSString *u = [NSString stringWithFormat:@"%@?t=%d", SCRIPT_URL, (int)[NSDate date].timeIntervalSince1970];
-    NSData *d = [NSData dataWithContentsOfURL:[NSURL URLWithString:u]];
-    if (!d) { vxLog(@"[VEEX] descarga fallo"); return; }
-    [d writeToFile:tmp atomically:YES];
-    vxLog(@"[VEEX] script %lu bytes", (unsigned long)d.length);
+    NSMutableURLRequest *rq =
+        [NSMutableURLRequest requestWithURL:[NSURL URLWithString:u]
+                                cachePolicy:NSURLRequestReloadIgnoringLocalAndRemoteCacheData
+                            timeoutInterval:20];
+    [rq setValue:@"no-cache" forHTTPHeaderField:@"Cache-Control"];
+
+    __block NSData *got = nil;
+    dispatch_semaphore_t sem = dispatch_semaphore_create(0);
+    NSURLSessionDataTask *t = [[NSURLSession sharedSession]
+        dataTaskWithRequest:rq
+          completionHandler:^(NSData *d, NSURLResponse *r, NSError *e) {
+            got = d;
+            if (e) vxLog(@"[VEEX] err %@", e.localizedDescription);
+            dispatch_semaphore_signal(sem);
+        }];
+    [t resume];
+    dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, 25 * NSEC_PER_SEC));
+    if (!got) { vxLog(@"[VEEX] descarga fallo"); return; }
+
+    NSString *tmp = [NSTemporaryDirectory() stringByAppendingPathComponent:@"veex_esp.lua"];
+    [got writeToFile:tmp atomically:YES];
+    vxLog(@"[VEEX] script %lu bytes", (unsigned long)got.length);
+
     dispatch_async(dispatch_get_main_queue(), ^{
         if (L) { lua_close(L); L = NULL; }
         L = luaL_newstate();
@@ -785,11 +805,22 @@ __attribute__((constructor)) static void vxInit(void) {
         @autoreleasepool {
             if (!gLog) gLog = [NSMutableString new];
             vxLog(@"[VEEX] init stage=%d", VX_STAGE);
-            vxFindImage();
+            vxLoadIL2CPP();
+
+            for (int i = 0; i < 40 && !gBase; i++) {
+                vxFindImage();
+                if (!gBase) [NSThread sleepForTimeInterval:0.5];
+            }
+            if (!gBase && p_domain_get) {
+                Dl_info di;
+                if (dladdr((void *)p_domain_get, &di) && di.dli_fbase)
+                    vxSetBase((const struct mach_header_64 *)di.dli_fbase);
+            }
+            vxLog(@"[VEEX] base=%llx size=%llx", gBase, gSize);
+
 #if VX_STAGE >= 3
             vxInstallHooks();
 #endif
-            vxLoadIL2CPP();
             [NSThread sleepForTimeInterval:2.0];
 #if VX_STAGE >= 2
             vxPatchCryptid();
