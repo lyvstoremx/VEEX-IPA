@@ -1,4 +1,4 @@
-log("VEEX v48")
+log("VEEX v49")
 
 local function pickmax(name)
   local best, bn = nil, -1
@@ -19,6 +19,22 @@ for _, c in ipairs(i2c_clsall("Object")) do
   if O then break end
 end
 
+local function dm(pat, max)
+  local k = 0
+  for _, m in ipairs(i2c_mnames(P)) do
+    if m:lower():find(pat) then
+      log("M " .. m)
+      k = k + 1
+      if k >= max then break end
+    end
+  end
+end
+dm("local", 10)
+dm("self", 8)
+dm("mine", 8)
+dm("hp", 15)
+dm("health", 8)
+
 local fot = O and i2c_mptr(O, "FindObjectsOfType", 1)
 local gtr = P and i2c_mptr(P, "get_transform", 0)
 local gnk = P and i2c_mptr(P, "get_NickName", 0)
@@ -37,8 +53,8 @@ local cam, cw, ch, frames, hplog = nil, 0, 0, 0, 0
 local boxes = {}
 
 local MAXD  = 250
-local NAMED = 60
-local ME    = 2.0
+local NAMED = 40
+local ME    = 1.2
 
 local function kl(p)
   if not p or p == 0 then return 0 end
@@ -106,7 +122,7 @@ local function update()
         end
         if not skip then
           local hx, hy, hz = w2s3(w2s, cam, x, y + 1.7, z)
-          if hz and hz > 2 and hz < MAXD then
+          if hz and hz > 0.5 and hz < MAXD then
             local fxx, fyy = w2s3(w2s, cam, x, y + 0.1, z)
             local cx = ((hx + fxx) / 2) * fx
             local ay1 = H - hy * fy
@@ -120,8 +136,8 @@ local function update()
               end
               if ghp then
                 hp = callf(ghp, e)
-                if hp and hplog < 3 then
-                  log("hp0=" .. tostring(hp))
+                if hplog < 4 then
+                  log("hf=" .. tostring(hp) .. " hi=" .. tostring(calli(ghp, e)))
                   hplog = hplog + 1
                 end
                 if hp and hp > 100 then hp = 100 end
@@ -135,19 +151,23 @@ local function update()
       end
     end
   end
+
+  table.sort(boxes, function(a, b) return a.d > b.d end)
 end
 
 function tick()
   clear()
-  local by = sh() - 22
   if not get("esp") then return end
 
   frames = frames + 1
   if frames % 2 == 1 then update() end
 
-  local W = sw()
-  for _, b in ipairs(boxes) do
+  local W, H = sw(), sh()
+  local n = #boxes
+
+  for i, b in ipairs(boxes) do
     local w = b.h * 0.45
+    local near = i > n - 6
     if get("line") then line(W / 2, 0, b.cx, b.y1, 1, 1, 1, 0.5) end
     if get("box") then rect(b.cx - w / 2, b.y1, w, b.h, 1, 0.2, 0.2, 1) end
     if b.hp and get("hp") then
@@ -156,12 +176,13 @@ function tick()
       fill(b.cx - w / 2 - 6, b.y1, 3, b.h, 0, 0, 0, 0.6)
       fill(b.cx - w / 2 - 6, b.y1 + (b.h - hh), 3, hh, 0.2, 1, 0.3, 1)
     end
-    if b.nm and get("name") and b.y1 > 18 then
+    if b.nm and get("name") and near and b.y1 > 26 and b.y1 < H - 6 then
       text(b.nm, b.cx - w / 2, b.y1 - 13, 1, 0.2, 0.2, 1)
     end
     if get("dist") then
       text(string.format("%dm", math.floor(b.d)), b.cx - 8, b.y1 + b.h + 2, 1, 1, 1, 1)
     end
   end
-  text("n=" .. #boxes, 10, by, 0.6, 1, 0.6, 1)
+
+  text("n=" .. n, 10, 120, 0.6, 1, 0.6, 1)
 end
