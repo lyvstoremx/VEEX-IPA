@@ -33,6 +33,8 @@ extern int csops(pid_t pid, unsigned int ops, void *useraddr, size_t usersize);
 #define VX_PFLAG_OFF          32
 #define VX_P_TRACED           0x00000800
 
+static const char *VX_FAKE = "/usr/lib/libobjc.A.dylib";
+
 // ============ LOG ============
 static NSMutableString *gLog = nil;
 static UITextView *gLogView = nil;
@@ -799,12 +801,6 @@ static CFTypeRef (*o_stcve)(void *, CFStringRef, CFErrorRef *) = NULL;
 
 static uint32_t gMyIdx = 0xFFFFFFFFu;
 
-static const char *vxMyPath(void) {
-    Dl_info i;
-    if (dladdr((void *)&vxMyPath, &i) && i.dli_fname) return i.dli_fname;
-    return NULL;
-}
-
 static uint32_t h_dyld_image_count(void) {
     uint32_t n = o_dyld_image_count ? o_dyld_image_count() : 0;
     if (gMyIdx != 0xFFFFFFFFu && n > 0) n--;
@@ -879,13 +875,41 @@ static CFTypeRef h_stcve(void *task, CFStringRef ent, CFErrorRef *e) {
 }
 
 static void vxFindSelf(void) {
-    if (!o_dyld_image_count || !o_dyld_get_image_name) return;
+    Dl_info di;
+    if (!dladdr((void *)&vxFindSelf, &di) || !di.dli_fbase) return;
+    if (!o_dyld_image_count || !o_dyld_get_image_header) return;
     uint32_t n = o_dyld_image_count();
-    const char *me = vxMyPath();
-    if (!me) return;
-    for (uint32_t i = 0; i < n; i++) {
-        const char *nm = o_dyld_get_image_name(i);
-        if (nm && !strcmp(nm, me)) { gMyIdx = i; return; }
+    for (uint32_t k = 0; k < n; k++) {
+        if ((const void *)o_dyld_get_image_header(k) == di.dli_fbase) { gMyIdx = k; return; }
+    }
+}
+
+static void vxPatchLoadName(void) {
+    if (!o_dyld_image_count || !o_dyld_get_image_header) return;
+    uint32_t n = o_dyld_image_count();
+    size_t fakeLen = strlen(VX_FAKE);
+    for (uint32_t k = 0; k < n; k++) {
+        const struct mach_header_64 *h = (const void *)o_dyld_get_image_header(k);
+        if (!h) continue;
+        const struct load_command *lc = (const struct load_command *)(h + 1);
+        for (uint32_t c = 0; c < h->ncmds; c++) {
+            if (lc->cmd == LC_LOAD_DYLIB || lc->cmd == LC_ID_DYLIB) {
+                struct dylib_command *d = (struct dylib_command *)lc;
+                char *nm = (char *)lc + d->dylib.name.offset;
+                if (strstr(nm, "libAudioEngine") || strstr(nm, "veex")) {
+                    size_t cur = strlen(nm);
+                    if (cur >= fakeLen) {
+                        uint64_t pg = (uint64_t)nm & ~0xFFFULL;
+                        vm_protect(mach_task_self(), pg, 0x4000, false,
+                                   VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY);
+                        memset(nm, 0, cur);
+                        memcpy(nm, VX_FAKE, fakeLen);
+                        vxLog(@"[VEEX] load name oculto");
+                    }
+                }
+            }
+            lc = (const struct load_command *)((uint8_t *)lc + lc->cmdsize);
+        }
     }
 }
 
@@ -906,6 +930,7 @@ static void vxInstallHooks(void) {
     };
     int e = rebind_symbols(rb, 12);
     vxFindSelf();
+    vxPatchLoadName();
     vxLog(@"[VEEX] hooks=%d idx=%u", e, gMyIdx);
 }
 
