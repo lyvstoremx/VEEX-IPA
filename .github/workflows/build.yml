@@ -12,6 +12,7 @@ jobs:
           tar xf lua.tgz
           mv lua-5.4.7 lua
           rm -f lua/lua.c lua/luac.c lua/onelua.c
+          sed -i '' 's|#define l_system(cmd)[[:space:]]*system(cmd)|#define l_system(cmd) 0|' lua/loslib.c
       - name: Compilar
         run: |
           SDK=$(xcrun --sdk iphoneos --show-sdk-path)
