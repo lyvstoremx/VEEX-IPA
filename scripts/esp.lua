@@ -1,4 +1,4 @@
-log("VEEX v29")
+log("VEEX v30")
 
 local function pickmax(name)
   local best, bn = nil, -1
@@ -39,7 +39,6 @@ local function u3(p)
   local b = p + 16
   return rf(b), rf(b + 4), rf(b + 8)
 end
-
 local function worldPos(e)
   local tr = call(gtr, e)
   if not tr or tr == 0 then return nil end
@@ -55,19 +54,19 @@ local function pickCam()
   local arr = callv(fot, 0, tc)
   if not arr or arr == 0 then return end
   local n = arrlen(arr)
-  local best, bw, bh, bs = nil, 0, 0, -1e9
   for i = 0, math.min(n, 8) - 1 do
     local c = arrat(arr, i)
     if c and c ~= 0 then
       local d = gdepth and rf(call(gdepth, c) + 16) or 0
-      local w = gpw and r32(call(gpw, c) + 16) or 0
-      local h = gph and r32(call(gph, c) + 16) or 0
-      if d == -1 then best, bw, bh = c, w, h break end
-      if d > bs and w > 100 then best, bw, bh, bs = c, w, h, d end
+      if d == -1 then
+        cam = c
+        cw = gpw and r32(call(gpw, c) + 16) or 0
+        ch = gph and r32(call(gph, c) + 16) or 0
+        log("cam w=" .. cw .. " h=" .. ch)
+        return
+      end
     end
   end
-  cam, cw, ch = best, bw, bh
-  if cam then log("cam d ok w=" .. cw) end
 end
 
 function tick()
@@ -99,16 +98,16 @@ function tick()
         local sp = callv(w2s, cam, vb)
         if sp and sp ~= 0 then
           local sx, sy, sz = u3(sp)
-          if sz > 0.5 then
+          if sz > 1 and sz < 400 then
             local ax, ay = sx * fx, sy * fy
-            if ax > -200 and ay > -200 and ax < sw() + 200 and ay < sh() + 200 then
-              local h = math.max(24, 900 / sz)
+            if ax > -150 and ay > -150 and ax < sw() + 150 and ay < sh() + 150 then
+              local h = math.min(400, math.max(22, 620 / sz))
               local w = h * 0.5
-              rect(ax - w / 2, ay - h, w, h, 1, 0.2, 0.2, 1)
+              rect(ax - w / 2, ay, w, h, 1, 0.2, 0.2, 1)
               if gnk then
                 local np = call(gnk, e)
                 if np and np ~= 0 then
-                  text(str(np), ax - w / 2, ay - h - 12, 1, 0.2, 0.2, 1)
+                  text(str(np), ax - w / 2, ay - 14, 1, 0.2, 0.2, 1)
                 end
               end
             end
