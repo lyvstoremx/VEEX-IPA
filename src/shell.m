@@ -3,6 +3,7 @@
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
 #import <Security/Security.h>
+#import <CommonCrypto/CommonCrypto.h>
 #import <objc/runtime.h>
 #import <objc/message.h>
 #import <mach/mach.h>
@@ -16,8 +17,8 @@
 #include "lauxlib.h"
 #include "lualib.h"
 
-// ===== etapa 3: hooks + App Attest anulado + huella de firma =====
-#define VX_STAGE 3
+// ===== etapa 5: identidad App Store falsificada =====
+#define VX_STAGE 5
 #define VX_FPS 20
 
 #define SCRIPT_API @"https://api.github.com/repos/lyvstoremx/VEEX-IPA/contents/scripts/esp.lua"
@@ -34,6 +35,13 @@ extern int csops(pid_t pid, unsigned int ops, void *useraddr, size_t usersize);
 #define VX_P_TRACED           0x00000800
 
 static const char *VX_FAKE = "/usr/lib/libobjc.A.dylib";
+
+// ===== huellas oficiales App Store =====
+static const char *VX_TEAM   = "98573T3W6L";
+static const char *VX_APPID  = "98573T3W6L.com.dts.freefireth";
+static const char *VX_H      = "00770007d45fe15664db57df30274f5c49daaa04f276be030f20686e673c833b";
+static const char *VX_CD     = "d9cf9ae60f2433bf47fe33a29d7122bb1bcc5965";
+static const char *VX_MD5ID  = "75ead73659249cdb3a0eee33e86c003a";
 
 // ============ LOG ============
 static NSMutableString *gLog = nil;
@@ -71,6 +79,14 @@ static void vxLog(NSString *fmt, ...) {
             if (gLog.length) [gLogView scrollRangeToVisible:NSMakeRange(gLog.length - 1, 1)];
         }
     });
+}
+
+static void vxHex(const char *hex, unsigned char *out, int n) {
+    for (int i = 0; i < n; i++) {
+        unsigned v = 0;
+        sscanf(hex + i * 2, "%2x", &v);
+        out[i] = (unsigned char)v;
+    }
 }
 
 // ============ CANVAS ============
@@ -808,7 +824,13 @@ static OSStatus (*o_scv)(void *, uint32_t, void *) = NULL;
 static OSStatus (*o_scvw)(void *, uint32_t, void *, CFErrorRef *) = NULL;
 static CFTypeRef (*o_stcve)(void *, CFStringRef, CFErrorRef *) = NULL;
 
+static unsigned char *(*o_md5)(const void *, CC_LONG, unsigned char *) = NULL;
+static unsigned char *(*o_sha1)(const void *, CC_LONG, unsigned char *) = NULL;
+static unsigned char *(*o_sha256)(const void *, CC_LONG, unsigned char *) = NULL;
+
 static uint32_t gMyIdx = 0xFFFFFFFFu;
+static uint64_t gMainHdr = 0;
+static uint64_t gMainSlide = 0;
 
 static uint32_t h_dyld_image_count(void) {
     uint32_t n = o_dyld_image_count ? o_dyld_image_count() : 0;
@@ -874,13 +896,55 @@ static OSStatus h_scvw(void *c, uint32_t f, void *req, CFErrorRef *e) {
     if (o_scvw) o_scvw(c, f, req, e);
     return 0;
 }
+
 static CFTypeRef h_stcve(void *task, CFStringRef ent, CFErrorRef *e) {
     CFTypeRef v = o_stcve ? o_stcve(task, ent, e) : NULL;
-    if (ent && CFEqual(ent, CFSTR("get-task-allow"))) {
-        if (v) CFRelease(v);
-        v = CFRetain(kCFBooleanFalse);
+    if (ent) {
+        if (CFEqual(ent, CFSTR("get-task-allow"))) {
+            if (v) CFRelease(v);
+            return CFRetain(kCFBooleanFalse);
+        }
+        if (CFEqual(ent, CFSTR("application-identifier"))) {
+            if (v) CFRelease(v);
+            return CFStringCreateWithCString(kCFAllocatorDefault, VX_APPID, kCFStringEncodingUTF8);
+        }
+        if (CFEqual(ent, CFSTR("com.apple.developer.team-identifier"))) {
+            if (v) CFRelease(v);
+            return CFStringCreateWithCString(kCFAllocatorDefault, VX_TEAM, kCFStringEncodingUTF8);
+        }
     }
     return v;
+}
+
+// ===== digest: devolver el oficial cuando el input es el que importa =====
+static unsigned char *h_md5(const void *d, CC_LONG len, unsigned char *md) {
+    unsigned char *r = o_md5 ? o_md5(d, len, md) : NULL;
+    if (r && d && len == 29 && !memcmp(d, "com.dts.freefireth_", 19)) {
+        vxHex(VX_MD5ID, md, 16);
+        vxLog(@"[VEEX] md5 id forzado");
+    }
+    return r;
+}
+
+static unsigned char *h_sha1(const void *d, CC_LONG len, unsigned char *md) {
+    unsigned char *r = o_sha1 ? o_sha1(d, len, md) : NULL;
+    if (r && d && len > 20) {
+        const unsigned char *b = d;
+        if (b[0] == 0xfa && b[1] == 0xde && b[2] == 0x0c && b[3] == 0x02) {
+            vxHex(VX_CD, md, 20);
+            vxLog(@"[VEEX] cdhash forzado");
+        }
+    }
+    return r;
+}
+
+static unsigned char *h_sha256(const void *d, CC_LONG len, unsigned char *md) {
+    unsigned char *r = o_sha256 ? o_sha256(d, len, md) : NULL;
+    if (r && d && (uint64_t)d == gMainHdr) {
+        vxHex(VX_H, md, 32);
+        vxLog(@"[VEEX] h forzado len=%u", (unsigned)len);
+    }
+    return r;
 }
 
 // ===== App Attest: fingir que el dispositivo no lo soporta =====
@@ -977,12 +1041,19 @@ static void vxInstallHooks(void) {
         { "SecCodeCheckValidity",                 h_scv,   (void **)&o_scv },
         { "SecCodeCheckValidityWithErrors",       h_scvw,  (void **)&o_scvw },
         { "SecTaskCopyValueForEntitlement",       h_stcve, (void **)&o_stcve },
+        { "CC_MD5",                       h_md5,                         (void **)&o_md5 },
+        { "CC_SHA1",                      h_sha1,                        (void **)&o_sha1 },
+        { "CC_SHA256",                    h_sha256,                      (void **)&o_sha256 },
     };
-    int e = rebind_symbols(rb, 12);
+    int e = rebind_symbols(rb, 15);
     vxFindSelf();
     vxPatchLoadName();
     vxKillAttest();
-    vxLog(@"[VEEX] hooks=%d idx=%u", e, gMyIdx);
+    if (o_dyld_get_image_header) {
+        gMainHdr = (uint64_t)o_dyld_get_image_header(0);
+        gMainSlide = (uint64_t)o_dyld_get_image_vmaddr_slide(0);
+    }
+    vxLog(@"[VEEX] hooks=%d idx=%u main=%llx", e, gMyIdx, gMainHdr);
     vxFingerprint();
 }
 
@@ -1121,7 +1192,7 @@ static void buildUI(void) {
     [p0 addArrangedSubview:vxRow(@"Línea",      vxSw(@"line", YES))];
     [p0 addArrangedSubview:vxRow(@"Nombre",     vxSw(@"name", YES))];
     [p0 addArrangedSubview:vxRow(@"Distancia",  vxSw(@"dist", YES))];
-    [p0 addArrangedSubview:vxRow(@"Salud",      vxSw("hp", YES))];
+    [p0 addArrangedSubview:vxRow(@"Salud",      vxSw(@"hp", YES))];
 
     UIStackView *p1 = [[UIStackView alloc] initWithFrame:gPages[1].bounds];
     p1.axis = UILayoutConstraintAxisVertical; p1.spacing = 5;
