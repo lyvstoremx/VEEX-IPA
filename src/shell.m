@@ -16,7 +16,7 @@
 #include "lauxlib.h"
 #include "lualib.h"
 
-// ===== CAMBIO 1: etapa 4 (cryptid solo en el binario principal) =====
+// ===== CAMBIO 1: etapa 4 + App Attest anulado =====
 #define VX_STAGE 4
 #define VX_FPS 20
 
@@ -293,7 +293,6 @@ static void vxFindImage(void) {
     }
 }
 
-// ===== CAMBIO 2: cryptid=1 SOLO en el binario principal =====
 static void vxPatchCryptid(void) {
     uint32_t n = _dyld_image_count();
     int hechos = 0;
@@ -302,7 +301,8 @@ static void vxPatchCryptid(void) {
         if (!nm) continue;
         if (strstr(nm, "Frameworks") || strstr(nm, ".framework")) continue;
         const struct mach_header_64 *h =
-            (const struct mach_header_64 *)_dyld_get_image_header(i);
+            (const struct mach_header_64 *)o_dyld_get_image_header;
+        h = (const struct mach_header_64 *)_dyld_get_image_header(i);
         if (!h || h->magic != MH_MAGIC_64) continue;
         const struct load_command *lc = (const struct load_command *)(h + 1);
         for (uint32_t k = 0; k < h->ncmds; k++) {
@@ -885,6 +885,25 @@ static CFTypeRef h_stcve(void *task, CFStringRef ent, CFErrorRef *e) {
     return v;
 }
 
+// ===== App Attest: fingir que el dispositivo no lo soporta =====
+static BOOL vxNoSupport(id self, SEL _cmd) { return NO; }
+static void vxAttestFail(id self, SEL _cmd, id keyId, id hash, void (^h)(id, id)) {
+    if (h) h(nil, [NSError errorWithDomain:@"veex" code:-1 userInfo:nil]);
+}
+
+static void vxKillAttest(void) {
+    Class c = objc_getClass("DCAppAttestService");
+    if (!c) { vxLog(@"[VEEX] sin DCAppAttestService"); return; }
+    int n = 0;
+    Method m = class_getInstanceMethod(c, @selector(isSupported));
+    if (m) { method_setImplementation(m, (IMP)vxNoSupport); n++; }
+    m = class_getInstanceMethod(c, NSSelectorFromString(@"attestKey:clientDataHash:completionHandler:"));
+    if (m) { method_setImplementation(m, (IMP)vxAttestFail); n++; }
+    m = class_getInstanceMethod(c, NSSelectorFromString(@"generateAssertion:clientDataHash:completionHandler:"));
+    if (m) { method_setImplementation(m, (IMP)vxAttestFail); n++; }
+    vxLog(@"[VEEX] attest swz=%d", n);
+}
+
 static void vxFindSelf(void) {
     Dl_info di;
     if (!dladdr((void *)&vxFindSelf, &di) || !di.dli_fbase) return;
@@ -942,6 +961,7 @@ static void vxInstallHooks(void) {
     int e = rebind_symbols(rb, 12);
     vxFindSelf();
     vxPatchLoadName();
+    vxKillAttest();
     vxLog(@"[VEEX] hooks=%d idx=%u", e, gMyIdx);
 }
 
