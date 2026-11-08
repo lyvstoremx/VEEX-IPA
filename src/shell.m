@@ -11,7 +11,6 @@
 #import <mach-o/loader.h>
 #import <dlfcn.h>
 #import <stdio.h>
-#import <libkern/OSCacheControl.h>
 #import <sys/mman.h>
 #import <sys/types.h>
 #import <sys/sysctl.h>
@@ -93,6 +92,7 @@ static void vxLog(NSString *fmt, ...) {
 
 // ============ HOOK INLINE ARM64 ============
 static int gHooked = 0;
+static void (*p_icache)(void *, size_t) = NULL;
 
 static int vxInlineHook(void *target, void *rep, void **origOut) {
     if (!target || !rep || !origOut) return -1;
@@ -125,7 +125,9 @@ static int vxInlineHook(void *target, void *rep, void **origOut) {
     t[1] = 0xD61F0200;
     *(uint64_t *)(t + 2) = (uint64_t)rep;
     vm_protect(mach_task_self(), pg, 0x4000, false, VM_PROT_READ | VM_PROT_EXECUTE);
-    sys_icache_invalidate(target, 16);
+
+    if (!p_icache) p_icache = (void (*)(void *, size_t))dlsym(RTLD_DEFAULT, "sys_icache_invalidate");
+    if (p_icache) p_icache(target, 16);
 
     *origOut = tr;
     return 0;
@@ -731,7 +733,7 @@ static int l_fill(lua_State *S) {
 static int l_line(lua_State *S) {
     CGPoint a = CGPointMake(lua_tonumber(S,1), lua_tonumber(S,2));
     CGPoint b = CGPointMake(lua_tonumber(S,3), lua_tonumber(S,4));
-    [gCanvas.cmds addObject:@["line", NSStringFromCGPoint(a), NSStringFromCGPoint(b), vxCol(S, 5)]];
+    [gCanvas.cmds addObject:@[@"line", NSStringFromCGPoint(a), NSStringFromCGPoint(b), vxCol(S, 5)]];
     return 0;
 }
 static int l_text(lua_State *S) {
