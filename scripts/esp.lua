@@ -1,4 +1,4 @@
--- VEEX v61
+-- VEEX v64
 local function on(k) return (cfg(k) or 0) ~= 0 end
 local function P(cls, mth, argc)
   local c = i2c_class(cls)
@@ -19,7 +19,7 @@ local gfwd    = P("Transform", "get_forward", 0)
 local geteu   = P("Transform", "get_eulerAngles", 0)
 local seteu   = P("Transform", "set_eulerAngles", 1)
 local gnk     = P("Player", "get_nickname", 0)
-log("v61 fot=" .. tostring(fot) .. " w2s=" .. tostring(w2s) .. " tp=" .. tostring(tp))
+log("v64 fot=" .. tostring(fot) .. " w2s=" .. tostring(w2s) .. " tp=" .. tostring(tp))
 
 local PAL = {
   {1, 0.22, 0.22}, {0.25, 1, 0.35}, {0.25, 0.72, 1}, {1, 1, 0.25},
