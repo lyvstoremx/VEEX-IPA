@@ -16,7 +16,7 @@
 #include "lauxlib.h"
 #include "lualib.h"
 
-// ===== CAMBIO 1: etapa 4 (cryptid + ocultamiento + firma + depuración) =====
+// ===== CAMBIO 1: etapa 4 (cryptid solo en el binario principal) =====
 #define VX_STAGE 4
 #define VX_FPS 20
 
@@ -293,11 +293,14 @@ static void vxFindImage(void) {
     }
 }
 
-// ===== CAMBIO 2: forzar cryptid=1 en todas las imágenes =====
+// ===== CAMBIO 2: cryptid=1 SOLO en el binario principal =====
 static void vxPatchCryptid(void) {
     uint32_t n = _dyld_image_count();
     int hechos = 0;
     for (uint32_t i = 0; i < n; i++) {
+        const char *nm = _dyld_get_image_name(i);
+        if (!nm) continue;
+        if (strstr(nm, "Frameworks") || strstr(nm, ".framework")) continue;
         const struct mach_header_64 *h =
             (const struct mach_header_64 *)_dyld_get_image_header(i);
         if (!h || h->magic != MH_MAGIC_64) continue;
@@ -311,7 +314,7 @@ static void vxPatchCryptid(void) {
                                VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY);
                     uint32_t viejo = e->cryptid;
                     e->cryptid = 1;
-                    vxLog(@"[VEEX] cryptid %u->1", viejo);
+                    vxLog(@"[VEEX] cryptid %u->1 %s", viejo, nm);
                     hechos++;
                 }
                 break;
