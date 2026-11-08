@@ -10,6 +10,7 @@
 #import <mach-o/dyld.h>
 #import <mach-o/loader.h>
 #import <dlfcn.h>
+#import <stdio.h>
 #import <sys/types.h>
 #import <sys/sysctl.h>
 #import "fishhook.h"
@@ -51,6 +52,14 @@ static NSString *vxLogPath(void) {
     return [NSHomeDirectory() stringByAppendingPathComponent:@"Documents/veex.log"];
 }
 
+static void vxHex(const char *hex, unsigned char *out, int n) {
+    for (int i = 0; i < n; i++) {
+        unsigned v = 0;
+        sscanf(hex + i * 2, "%2x", &v);
+        out[i] = (unsigned char)v;
+    }
+}
+
 static void vxLog(NSString *fmt, ...) {
     va_list ap; va_start(ap, fmt);
     NSString *s = [[NSString alloc] initWithFormat:fmt arguments:ap];
@@ -79,14 +88,6 @@ static void vxLog(NSString *fmt, ...) {
             if (gLog.length) [gLogView scrollRangeToVisible:NSMakeRange(gLog.length - 1, 1)];
         }
     });
-}
-
-static void vxHex(const char *hex, unsigned char *out, int n) {
-    for (int i = 0; i < n; i++) {
-        unsigned v = 0;
-        sscanf(hex + i * 2, "%2x", &v);
-        out[i] = (unsigned char)v;
-    }
 }
 
 // ============ CANVAS ============
@@ -830,7 +831,6 @@ static unsigned char *(*o_sha256)(const void *, CC_LONG, unsigned char *) = NULL
 
 static uint32_t gMyIdx = 0xFFFFFFFFu;
 static uint64_t gMainHdr = 0;
-static uint64_t gMainSlide = 0;
 
 static uint32_t h_dyld_image_count(void) {
     uint32_t n = o_dyld_image_count ? o_dyld_image_count() : 0;
@@ -929,7 +929,7 @@ static unsigned char *h_md5(const void *d, CC_LONG len, unsigned char *md) {
 static unsigned char *h_sha1(const void *d, CC_LONG len, unsigned char *md) {
     unsigned char *r = o_sha1 ? o_sha1(d, len, md) : NULL;
     if (r && d && len > 20) {
-        const unsigned char *b = d;
+        const unsigned char *b = (const unsigned char *)d;
         if (b[0] == 0xfa && b[1] == 0xde && b[2] == 0x0c && b[3] == 0x02) {
             vxHex(VX_CD, md, 20);
             vxLog(@"[VEEX] cdhash forzado");
@@ -1029,30 +1029,27 @@ static void vxPatchLoadName(void) {
 
 static void vxInstallHooks(void) {
     struct rebinding rb[] = {
-        { "_dyld_image_count",            h_dyld_image_count,            (void **)&o_dyld_image_count },
-        { "_dyld_get_image_name",         h_dyld_get_image_name,         (void **)&o_dyld_get_image_name },
-        { "_dyld_get_image_header",       h_dyld_get_image_header,       (void **)&o_dyld_get_image_header },
-        { "_dyld_get_image_vmaddr_slide", h_dyld_get_image_vmaddr_slide, (void **)&o_dyld_get_image_vmaddr_slide },
-        { "csops",                        h_csops,                       (void **)&o_csops },
-        { "sysctl",                       h_sysctl,                      (void **)&o_sysctl },
-        { "sysctlbyname",                 h_sysctlbyname,                (void **)&o_sysctlbyname },
-        { "SecStaticCodeCheckValidity",           h_sscv,  (void **)&o_sscv },
-        { "SecStaticCodeCheckValidityWithErrors", h_sscvw, (void **)&o_sscvw },
-        { "SecCodeCheckValidity",                 h_scv,   (void **)&o_scv },
-        { "SecCodeCheckValidityWithErrors",       h_scvw,  (void **)&o_scvw },
-        { "SecTaskCopyValueForEntitlement",       h_stcve, (void **)&o_stcve },
-        { "CC_MD5",                       h_md5,                         (void **)&o_md5 },
-        { "CC_SHA1",                      h_sha1,                        (void **)&o_sha1 },
-        { "CC_SHA256",                    h_sha256,                      (void **)&o_sha256 },
+        { "_dyld_image_count",            (void *)h_dyld_image_count,            (void **)&o_dyld_image_count },
+        { "_dyld_get_image_name",         (void *)h_dyld_get_image_name,         (void **)&o_dyld_get_image_name },
+        { "_dyld_get_image_header",       (void *)h_dyld_get_image_header,       (void **)&o_dyld_get_image_header },
+        { "_dyld_get_image_vmaddr_slide", (void *)h_dyld_get_image_vmaddr_slide, (void **)&o_dyld_get_image_vmaddr_slide },
+        { "csops",                        (void *)h_csops,                       (void **)&o_csops },
+        { "sysctl",                       (void *)h_sysctl,                      (void **)&o_sysctl },
+        { "sysctlbyname",                 (void *)h_sysctlbyname,                (void **)&o_sysctlbyname },
+        { "SecStaticCodeCheckValidity",           (void *)h_sscv,  (void **)&o_sscv },
+        { "SecStaticCodeCheckValidityWithErrors", (void *)h_sscvw, (void **)&o_sscvw },
+        { "SecCodeCheckValidity",                 (void *)h_scv,   (void **)&o_scv },
+        { "SecCodeCheckValidityWithErrors",       (void *)h_scvw,  (void **)&o_scvw },
+        { "SecTaskCopyValueForEntitlement",       (void *)h_stcve, (void **)&o_stcve },
+        { "CC_MD5",                       (void *)h_md5,                         (void **)&o_md5 },
+        { "CC_SHA1",                      (void *)h_sha1,                        (void **)&o_sha1 },
+        { "CC_SHA256",                    (void *)h_sha256,                      (void **)&o_sha256 },
     };
     int e = rebind_symbols(rb, 15);
     vxFindSelf();
     vxPatchLoadName();
     vxKillAttest();
-    if (o_dyld_get_image_header) {
-        gMainHdr = (uint64_t)o_dyld_get_image_header(0);
-        gMainSlide = (uint64_t)o_dyld_get_image_vmaddr_slide(0);
-    }
+    if (o_dyld_get_image_header) gMainHdr = (uint64_t)o_dyld_get_image_header(0);
     vxLog(@"[VEEX] hooks=%d idx=%u main=%llx", e, gMyIdx, gMainHdr);
     vxFingerprint();
 }
