@@ -502,7 +502,8 @@ static int l_callf(lua_State *S) {
     void *code = vxCode(VXP(lua_tointeger(S, 1)));
     void *o = VXP(lua_tointeger(S, 2));
     float r = 0;
-    if (code) { float (*fn)(void *) = (float (*)(void *))code; r = fn(o); }
+    if (code) { float (*fn)(void (*)(void *)) = NULL; (void)fn; }
+    if (code) { float (*fn2)(void *) = (float (*)(void *))code; r = fn2(o); }
     lua_pushnumber(S, r);
     return 1;
 }
@@ -963,7 +964,7 @@ static void vxKillAttest(void) {
     if (!m) m = class_getInstanceMethod(c, @selector(isSupported));
     if (m) { method_setImplementation(m, (IMP)vxNoSupport); n++; }
     m = class_getInstanceMethod(c, NSSelectorFromString(@"attestKey:clientDataHash:completionHandler:"));
-    if (m) { method_setImplementation(m, (IMP)vxAttestFail); n++; }
+    if (m) { m = m; method_setImplementation(m, (IMP)vxAttestFail); n++; }
     m = class_getInstanceMethod(c, NSSelectorFromString(@"generateAssertion:clientDataHash:completionHandler:"));
     if (m) { method_setImplementation(m, (IMP)vxAttestFail); n++; }
     vxLog(@"[VEEX] attest swz=%d", n);
@@ -974,13 +975,22 @@ static void vxFingerprint(void) {
     NSBundle *b = [NSBundle mainBundle];
     vxLog(@"[VEEX] bundle=%@", b.bundleIdentifier);
     vxLog(@"[VEEX] exe=%@", b.executablePath);
-    SecTaskRef t = SecTaskCreateFromSelf(kCFAllocatorDefault);
-    if (!t) { vxLog(@"[VEEX] sin SecTask"); return; }
+
+    void *sec = dlopen("/System/Library/Frameworks/Security.framework/Security", RTLD_NOW);
+    if (!sec) { vxLog(@"[VEEX] sin Security"); return; }
+    void *(*cfs)(CFAllocatorRef) =
+        (void *(*)(CFAllocatorRef))dlsym(sec, "SecTaskCreateFromSelf");
+    CFTypeRef (*cvfe)(void *, CFStringRef, CFErrorRef *) =
+        (CFTypeRef (*)(void *, CFStringRef, CFErrorRef *))dlsym(sec, "SecTaskCopyValueForEntitlement");
+    if (!cfs || !cvfe) { vxLog(@"[VEEX] sin SecTask"); return; }
+    void *t = cfs(kCFAllocatorDefault);
+    if (!t) { vxLog(@"[VEEX] sin task"); return; }
+
     const char *keys[] = { "application-identifier", "com.apple.developer.team-identifier",
                            "get-task-allow", "beta-reports-active", "aps-environment" };
     for (int i = 0; i < 5; i++) {
         CFStringRef k = CFStringCreateWithCString(kCFAllocatorDefault, keys[i], kCFStringEncodingUTF8);
-        CFTypeRef v = SecTaskCopyValueForEntitlement(t, k, NULL);
+        CFTypeRef v = cvfe(t, k, NULL);
         vxLog(@"[VEEX] ent %s=%@", keys[i], v ? (__bridge id)v : @"(nil)");
         if (v) CFRelease(v);
         CFRelease(k);
