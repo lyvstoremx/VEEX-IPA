@@ -19,9 +19,10 @@
 #include "lauxlib.h"
 #include "lualib.h"
 
-// ===== etapa 6, conjunto 1: solo CC_SHA256 =====
+// ===== etapa 6, conjunto 1, hooks manuales =====
 #define VX_STAGE 6
 #define VX_HOOKSET 1
+#define VX_AUTOHOOK 0
 #define VX_FPS 20
 
 #define SCRIPT_API @"https://api.github.com/repos/lyvstoremx/VEEX-IPA/contents/scripts/esp.lua"
@@ -272,6 +273,7 @@ static UIView *gFabRef(void) { return gFab; }
 - (void)vxDoTab;
 - (void)vxDoCopy;
 - (void)vxDoClear;
+- (void)vxDoHook;
 - (void)vxDoReset;
 - (void)vxDoRun;
 - (void)vxDoClose;
@@ -279,6 +281,7 @@ static UIView *gFabRef(void) { return gFab; }
 
 static void buildUI(void);
 static void vxAttach(void);
+static void vxInstallHooks(void);
 
 @implementation UIButton (VX)
 - (void)vxDoTap {
@@ -298,6 +301,12 @@ static void vxAttach(void);
     [gLog setString:@""];
     [[NSData data] writeToFile:vxLogPath() atomically:YES];
     if (gLogView) gLogView.text = @"";
+}
+- (void)vxDoHook {
+    vxLog(@"[VEEX] instalando hooks...");
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        vxInstallHooks();
+    });
 }
 - (void)vxDoReset {
     vxLog(@"[VEEX] RESET GUEST...");
@@ -1055,7 +1064,7 @@ static void vxKillAttest(void) {
     m = class_getInstanceMethod(c, NSSelectorFromString(@"attestKey:clientDataHash:completionHandler:"));
     if (m) { method_setImplementation(m, (IMP)vxAttestFail); n++; }
     m = class_getInstanceMethod(c, NSSelectorFromString(@"generateAssertion:clientDataHash:completionHandler:"));
-    if (m) { method_setImplementation(m, (IMP)vxAttestFail); n++; }
+    if (m) { m = m; method_setImplementation(m, (IMP)vxAttestFail); n++; }
     vxLog(@"[VEEX] attest swz=%d", n);
 }
 
@@ -1332,17 +1341,17 @@ static void buildUI(void) {
     [content addSubview:gLogView];
     gLogView.text = gLog;
 
-    NSArray *acts = @[@"COPIAR", @"LIMPIAR", @"RUN", @"RESET", @"CERRAR"];
-    SEL sels[5] = { @selector(vxDoCopy), @selector(vxDoClear), @selector(vxDoRun),
-                    @selector(vxDoReset), @selector(vxDoClose) };
+    NSArray *acts = @[@"COPIAR", @"LIMPIAR", @"HOOK", @"RUN", @"RESET", @"CERRAR"];
+    SEL sels[6] = { @selector(vxDoCopy), @selector(vxDoClear), @selector(vxDoHook),
+                    @selector(vxDoRun), @selector(vxDoReset), @selector(vxDoClose) };
     UIStackView *foot = [[UIStackView alloc] initWithFrame:CGRectMake(12, 408, 276, 32)];
     foot.distribution = UIStackViewDistributionFillEqually;
-    foot.spacing = 5;
+    foot.spacing = 4;
     [content addSubview:foot];
-    for (int i = 0; i < 5; i++) {
+    for (int i = 0; i < 6; i++) {
         UIButton *b = [UIButton buttonWithType:UIButtonTypeCustom];
         [b setTitle:acts[i] forState:UIControlStateNormal];
-        b.titleLabel.font = [UIFont systemFontOfSize:9 weight:UIFontWeightBold];
+        b.titleLabel.font = [UIFont systemFontOfSize:8 weight:UIFontWeightBold];
         b.backgroundColor = [UIColor colorWithWhite:1 alpha:0.12];
         b.layer.cornerRadius = 8;
         [b addTarget:b action:sels[i] forControlEvents:UIControlEventTouchUpInside];
@@ -1363,7 +1372,7 @@ __attribute__((constructor)) static void vxInit(void) {
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
         @autoreleasepool {
             if (!gLog) gLog = [NSMutableString new];
-            vxLog(@"[VEEX] init stage=%d set=%d", VX_STAGE, VX_HOOKSET);
+            vxLog(@"[VEEX] init stage=%d set=%d auto=%d", VX_STAGE, VX_HOOKSET, VX_AUTOHOOK);
             vxLoadIL2CPP();
 
             for (int i = 0; i < 40 && !gBase; i++) {
@@ -1377,7 +1386,7 @@ __attribute__((constructor)) static void vxInit(void) {
             }
             vxLog(@"[VEEX] base=%llx size=%llx", gBase, gSize);
 
-#if VX_STAGE >= 3
+#if VX_AUTOHOOK
             vxInstallHooks();
 #endif
             [NSThread sleepForTimeInterval:2.0];
