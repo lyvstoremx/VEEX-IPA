@@ -16,8 +16,8 @@
 #include "lauxlib.h"
 #include "lualib.h"
 
-// ===== CAMBIO 1: etapa 4 + App Attest anulado =====
-#define VX_STAGE 4
+// ===== etapa 3: hooks + App Attest anulado, sin cryptid =====
+#define VX_STAGE 3
 #define VX_FPS 20
 
 #define SCRIPT_API @"https://api.github.com/repos/lyvstoremx/VEEX-IPA/contents/scripts/esp.lua"
@@ -300,9 +300,7 @@ static void vxPatchCryptid(void) {
         const char *nm = _dyld_get_image_name(i);
         if (!nm) continue;
         if (strstr(nm, "Frameworks") || strstr(nm, ".framework")) continue;
-        const struct mach_header_64 *h =
-            (const struct mach_header_64 *)o_dyld_get_image_header;
-        h = (const struct mach_header_64 *)_dyld_get_image_header(i);
+        const struct mach_header_64 *h = (const struct mach_header_64 *)_dyld_get_image_header(i);
         if (!h || h->magic != MH_MAGIC_64) continue;
         const struct load_command *lc = (const struct load_command *)(h + 1);
         for (uint32_t k = 0; k < h->ncmds; k++) {
@@ -887,15 +885,18 @@ static CFTypeRef h_stcve(void *task, CFStringRef ent, CFErrorRef *e) {
 
 // ===== App Attest: fingir que el dispositivo no lo soporta =====
 static BOOL vxNoSupport(id self, SEL _cmd) { return NO; }
-static void vxAttestFail(id self, SEL _cmd, id keyId, id hash, void (^h)(id, id)) {
-    if (h) h(nil, [NSError errorWithDomain:@"veex" code:-1 userInfo:nil]);
+
+static void vxAttestFail(id self, SEL _cmd, id a, id b, void (^h)(id, id)) {
+    if (h) h([NSData data], [NSError errorWithDomain:@"DCAppAttestErrorDomain" code:1 userInfo:nil]);
 }
 
 static void vxKillAttest(void) {
+    dlopen("/System/Library/Frameworks/DeviceCheck.framework/DeviceCheck", RTLD_NOW);
     Class c = objc_getClass("DCAppAttestService");
     if (!c) { vxLog(@"[VEEX] sin DCAppAttestService"); return; }
     int n = 0;
-    Method m = class_getInstanceMethod(c, @selector(isSupported));
+    Method m = class_getClassMethod(c, @selector(isSupported));
+    if (!m) m = class_getInstanceMethod(c, @selector(isSupported));
     if (m) { method_setImplementation(m, (IMP)vxNoSupport); n++; }
     m = class_getInstanceMethod(c, NSSelectorFromString(@"attestKey:clientDataHash:completionHandler:"));
     if (m) { method_setImplementation(m, (IMP)vxAttestFail); n++; }
