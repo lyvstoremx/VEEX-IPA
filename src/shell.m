@@ -8,7 +8,6 @@
 #import <objc/message.h>
 #import <mach/mach.h>
 #import <mach/vm_map.h>
-#import <mach/mach_vm.h>
 #import <mach-o/dyld.h>
 #import <mach-o/loader.h>
 #import <dlfcn.h>
@@ -109,11 +108,22 @@ static void vxLog(NSString *fmt, ...) {
 }
 
 // ============ HOOK INLINE ARM64 ============
+static uint8_t gTramp[0x4000] __attribute__((aligned(0x4000)));
+static int gTrampUsed = 0;
 static int gHooked = 0;
 static void (*p_icache)(void *, size_t) = NULL;
 
+static int vxTrampReady(void) {
+    uint64_t pg = (uint64_t)gTramp & ~(VX_PG - 1);
+    if (vm_protect(mach_task_self(), pg, VX_PG, false,
+                   VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXECUTE) != KERN_SUCCESS)
+        return -8;
+    return 0;
+}
+
 static int vxInlineHook(void *target, void *rep, void **origOut) {
     if (!target || !rep || !origOut) return -1;
+    if (gTrampUsed > 400) return -9;
     uint32_t *t = (uint32_t *)target;
 
     for (int i = 0; i < 4; i++) {
@@ -124,18 +134,17 @@ static int vxInlineHook(void *target, void *rep, void **origOut) {
         if ((in & 0x3B000000) == 0x18000000) return -5;  // ldr literal
     }
 
-    vm_address_t tr = 0;
-    if (vm_allocate(mach_task_self(), &tr, VX_PG, 1) != KERN_SUCCESS) return -6;
+    if (!gTrampUsed) {
+        int r = vxTrampReady();
+        if (r) return r;
+    }
 
-    memcpy((void *)tr, t, 16);
+    uint8_t *tr = gTramp + (size_t)(gTrampUsed++) * 64;
+    memcpy(tr, t, 16);
     uint32_t *w = (uint32_t *)(tr + 16);
     *(uint64_t *)(tr + 24) = (uint64_t)target + 16;
     w[1] = 0xD61F0200;  // br x16
     w[0] = 0x58000050;  // ldr x16, #8
-    if (vm_protect(mach_task_self(), tr, VX_PG, false, VM_PROT_READ | VM_PROT_EXECUTE) != KERN_SUCCESS) {
-        vm_deallocate(mach_task_self(), tr, VX_PG);
-        return -8;
-    }
 
     uint64_t start = (uint64_t)target & ~(VX_PG - 1);
     uint64_t endp = ((uint64_t)target + 16 + VX_PG - 1) & ~(VX_PG - 1);
@@ -143,19 +152,18 @@ static int vxInlineHook(void *target, void *rep, void **origOut) {
     if (span < VX_PG) span = VX_PG;
 
     if (vm_protect(mach_task_self(), start, span, false,
-                   VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY) != KERN_SUCCESS) {
-        vm_deallocate(mach_task_self(), tr, VX_PG);
+                   VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY) != KERN_SUCCESS)
         return -7;
-    }
+
     *(uint64_t *)(t + 2) = (uint64_t)rep;
     t[1] = 0xD61F0200;
     t[0] = 0x58000050;
     vm_protect(mach_task_self(), start, span, false, VM_PROT_READ | VM_PROT_EXECUTE);
 
     if (!p_icache) p_icache = (void (*)(void *, size_t))dlsym(RTLD_DEFAULT, "sys_icache_invalidate");
-    if (p_icache) p_icache(target, 16);
+    if (p_icache) { p_icache(tr, 32); p_icache(target, 16); }
 
-    *origOut = (void *)tr;
+    *origOut = tr;
     return 0;
 }
 
