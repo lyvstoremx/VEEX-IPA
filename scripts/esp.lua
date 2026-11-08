@@ -1,4 +1,4 @@
-log("VEEX v58")
+log("VEEX v60 anticheat")
 
 local function pickmax(name)
   local best, bn = nil, -1
@@ -19,6 +19,59 @@ for _, c in ipairs(i2c_clsall("Object")) do
   if O then break end
 end
 
+local pats = { "cheat", "anti", "secur", "integr", "detect", "guard",
+               "tamper", "verif", "signa", "hash", "protect", "jail" }
+local seen = {}
+local found = {}
+for _, cn in ipairs(i2c_classes()) do
+  local l = cn:lower()
+  local hit = false
+  for _, p in ipairs(pats) do
+    if l:find(p) then hit = true break end
+  end
+  if hit and not seen[cn] then
+    seen[cn] = true
+    found[#found + 1] = cn
+    log("C " .. cn)
+    if #found >= 60 then break end
+  end
+end
+log("NC=" .. #found)
+
+for i = 1, math.min(#found, 14) do
+  local c = i2c_cls(found[i])
+  if c then
+    local k = 0
+    for _, m in ipairs(i2c_mnames(c)) do
+      local l = m:lower()
+      if l:find("check") or l:find("verif") or l:find("sign")
+        or l:find("valid") or l:find("cheat") or l:find("detect")
+        or l:find("hash") or l:find("init") or l:find("start") then
+        log("M " .. found[i] .. "." .. m)
+        k = k + 1
+        if k >= 12 then break end
+      end
+    end
+  end
+end
+
+local vp = { "garena", "dtt", "beacon", "msdk", "tss" }
+local vs = {}
+local vn = 0
+for _, cn in ipairs(i2c_classes()) do
+  local l = cn:lower()
+  for _, p in ipairs(vp) do
+    if l:find(p) and not vs[cn] then
+      vs[cn] = true
+      log("V " .. cn)
+      vn = vn + 1
+      break
+    end
+  end
+  if vn >= 20 then break end
+end
+log("FIN anti")
+
 local fot = O and i2c_mptr(O, "FindObjectsOfType", 1)
 local gtr = P and i2c_mptr(P, "get_transform", 0)
 local gnk = P and i2c_mptr(P, "get_NickName", 0)
@@ -29,22 +82,17 @@ local gph = C and i2c_mptr(C, "get_pixelHeight", 0)
 local tp = P and clstype(P)
 local tc = C and clstype(C)
 local gfwd = i2c_ptr("Transform", "get_forward", 0)
-local lookat = i2c_ptr("Transform", "LookAt", 1)
 
-local ghp = P and (i2c_mptr(P, "get_HP", 0) or i2c_mptr(P, "get_Hp", 0)
-  or i2c_mptr(P, "get_CurHP", 0) or i2c_mptr(P, "get_Health", 0))
-log("hp=" .. tostring(ghp) .. " look=" .. tostring(lookat))
+local ghp = P and (i2c_mptr(P, "get_HP", 0) or i2c_mptr(P, "get_Hp", 0))
 
-local cam, cw, ch, frames, dclog = nil, 0, 0, 0, 0
+local cam, cw, ch, frames = nil, 0, 0, 0
 local boxes = {}
-local aimT = nil
 
 local MAXHP = 200
 local MAXD  = 300
 local NAMED = 15
 local NCAP  = 60
 local BCAP  = 30
-local AIMPX = 150
 
 local function kl(p)
   if not p or p == 0 then return 0 end
@@ -80,7 +128,6 @@ end
 
 local function update()
   boxes = {}
-  aimT = nil
   if not (fot and gtr and w2s and tp and tc) then return end
   if not cam then pickCam() end
   if not cam then return end
@@ -185,23 +232,6 @@ local function update()
     end
   end
 
-  if get("aim") then
-    local cx0, cy0 = W / 2, H * 0.35
-    local best, bt = 1e9, nil
-    for _, b in ipairs(boxes) do
-      if b.d < 150 then
-        local dx, dy = b.cx - cx0, (b.y1 + b.h * 0.12) - cy0
-        local d2 = dx * dx + dy * dy
-        if d2 < AIMPX * AIMPX and d2 < best then
-          best = d2
-          bt = b
-        end
-      end
-    end
-    if bt then aimT = bt end
-  end
-
-  dclog = dclog + 1
   table.sort(boxes, function(a, b) return a.d > b.d end)
 end
 
@@ -242,26 +272,6 @@ function tick()
     end
     if get("dist") and b.d < 60 then
       text(string.format("%dm", math.floor(b.d)), b.cx - 8, b.y1 + b.h + 2, cr, cg, cb, 1)
-    end
-  end
-
-  if get("aim") then
-    local cx0, cy0 = W / 2, H * 0.35
-    local px, py = nil, nil
-    for k = 0, 23 do
-      local a = k / 24 * 6.28318
-      local x, y = cx0 + math.cos(a) * AIMPX, cy0 + math.sin(a) * AIMPX
-      if px then line(px, py, x, y, 1, 1, 1, 0.22) end
-      px, py = x, y
-    end
-    if aimT then
-      local tx, ty = aimT.cx, aimT.y1 + aimT.h * 0.12
-      line(tx - 6, ty, tx + 6, ty, 0.3, 1, 0.35, 1)
-      line(tx, ty - 6, tx, ty + 6, 0.3, 1, 0.35, 1)
-      if lookat and cam then
-        local ctr = call(gtr, cam)
-        if ctr and ctr ~= 0 then callv(lookat, ctr, aimT.t) end
-      end
     end
   end
 
