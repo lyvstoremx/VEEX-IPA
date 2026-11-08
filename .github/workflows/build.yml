@@ -12,6 +12,7 @@ jobs:
       - name: lua
         run: |
           curl -L --retry 5 --retry-delay 3 -o lua.tgz https://github.com/lua/lua/archive/refs/tags/v5.4.7.tar.gz
+          ls -l lua.tgz
           tar xzf lua.tgz
           mv lua-5.4.7 lua-src
           sed -i '' 's/^#define l_system(cmd).*/#define l_system(cmd) 0/' lua-src/loslib.c
@@ -19,14 +20,22 @@ jobs:
       - name: build
         run: |
           SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+          echo "SDK=$SDK"
           mkdir -p out
-          SRC=$(ls lua-src/*.c | grep -v '/lua\.c' | grep -v '/luac\.c' | grep -v '/onelua\.c')
+          SRC=$(ls lua-src/*.c | grep -v '/lua\.c' | grep -v '/luac\.c' | grep -v '/onelua\.c' || true)
           clang -dynamiclib -target arm64-apple-ios14.0 -isysroot "$SDK" -fobjc-arc -O2 \
             -Isrc -Ilua-src -install_name @rpath/libAudioEngine.dylib \
             -framework Foundation -framework UIKit -framework CoreGraphics -framework QuartzCore -framework Security \
-            -o out/libAudioEngine.dylib src/shell.m src/fishhook.c $SRC
+            -o out/libAudioEngine.dylib src/shell.m $SRC 2> err.log || true
+          if [ -s err.log ]; then
+            grep -m 6 -E "error:" err.log | while IFS= read -r L; do echo "::error file=src/shell.m::$L"; done
+            echo "----- primeras lineas del compilador -----"
+            head -40 err.log
+          fi
+          test -f out/libAudioEngine.dylib || exit 1
 
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: libAudioEngine
-          path: out/libAudioEngine.dylib
+          path: out/
