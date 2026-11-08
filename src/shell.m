@@ -1,4 +1,4 @@
-// src/shell.m — VEEX build 61
+// src/shell.m — VEEX build 62
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
@@ -12,7 +12,10 @@
 #import <mach-o/getsect.h>
 #import <dlfcn.h>
 #import <stdio.h>
+#import <stdarg.h>
+#import <stdlib.h>
 #import <string.h>
+#import <time.h>
 #import <sys/mman.h>
 #import <sys/types.h>
 #import <sys/sysctl.h>
@@ -20,7 +23,7 @@
 #include "lauxlib.h"
 #include "lualib.h"
 
-#define VX_BUILD 61
+#define VX_BUILD 62
 #define VX_STAGE 6
 #define VX_HOOKSET 1
 #define VX_AUTOHOOK 1
@@ -38,7 +41,6 @@ extern int csops(pid_t pid, unsigned int ops, void *useraddr, size_t usersize);
 #define VX_PFLAG_OFF          32
 #define VX_P_TRACED           0x00000800
 #define VX_PG                 0x4000
-#define MAXLBL                256
 
 // identidad oficial
 static const char *VX_H     = "00770007d45fe15664db57df30274f5c49daaa04f276be030f20686e673c833b";
@@ -73,7 +75,6 @@ static volatile unsigned gLastLen256 = 0;
 static volatile int gLastIn256 = 0;
 static volatile int gBodies = 0;
 static int gInstalled = 0;
-static int gTried = 0;
 
 static int vxInText(const void *p) {
     uint64_t a = (uint64_t)p;
@@ -249,9 +250,12 @@ static CFTypeRef h_stcve(void *task, CFStringRef key, void **err) {
 }
 
 typedef int32_t (*f_scv)(void *, uint32_t, void *);
-static f_scv o_sscv = NULL, o_sscvw = NULL, o_scv = NULL, o_scvw = NULL;
-static int32_t h_scv(void *a, uint32_t b, void *c) { return 0; }
+typedef int32_t (*f_scvw)(void *, uint32_t, void *, void **);
+static f_scv o_sscv = NULL, o_sscvw = NULL, o_scv = NULL;
+static f_scvw o_scvw = NULL;
+static int32_t h_scv(void *a, uint32_t b, void *c) { (void)a; (void)b; (void)c; return 0; }
 static int32_t h_scvw(void *a, uint32_t b, void *c, void **d) {
+    (void)a; (void)b; (void)c;
     if (d) *d = NULL;
     return 0;
 }
@@ -314,7 +318,7 @@ static int h_sysctlbyname(const char *nm, void *o, size_t *ol, void *nw, size_t 
 static void vxInstallHooks(void) {
     if (gInstalled) return;
     gInstalled = 1;
-    if (!p_icache) p_icache = (void *)dlsym(RTLD_DEFAULT, "sys_icache_invalidate");
+    if (!p_icache) p_icache = (void (*)(void *, size_t))dlsym(RTLD_DEFAULT, "sys_icache_invalidate");
 
 #if VX_HOOKSET >= 1
     vxHookName("CC_MD5",    (void *)h_md5,    (void **)&o_md5);
@@ -324,17 +328,16 @@ static void vxInstallHooks(void) {
 #if VX_HOOKSET >= 2
     if (!p_security) p_security = dlopen("/System/Library/Frameworks/Security.framework/Security", RTLD_NOW);
     if (p_security) {
-        o_stcve = dlsym(p_security, "SecTaskCopyValueForEntitlement");
-        if (o_stcve) { void *t = o_stcve; o_stcve = NULL;
-            if (vxInlineHook(t, (void *)h_stcve, (void **)&o_stcve) == 0) { gHooked++; vxLog(@"[VEEX] +stcve"); } }
-        o_sscv = (f_scv)dlsym(p_security, "SecStaticCodeCheckValidity");
-        if (o_sscv) { void *t = (void *)o_sscv; if (vxInlineHook(t, (void *)h_scv, (void **)&o_sscv) == 0) gHooked++; }
-        o_sscvw = (f_scv)dlsym(p_security, "SecStaticCodeCheckValidityWithErrors");
-        if (o_sscvw) { void *t = (void *)o_sscvw; if (vxInlineHook(t, (void *)h_scvw, (void **)&o_sscvw) == 0) gHooked++; }
-        o_scv = (f_scv)dlsym(p_security, "SecCodeCheckValidity");
-        if (o_scv) { void *t = (void *)o_scv; if (vxInlineHook(t, (void *)h_scv, (void **)&o_scv) == 0) gHooked++; }
-        o_scvw = (f_scv)dlsym(p_security, "SecCodeCheckValidityWithErrors");
-        if (o_scvw) { void *t = (void *)o_scvw; if (vxInlineHook(t, (void *)h_scvw, (void **)&o_scvw) == 0) gHooked++; }
+        void *t1 = dlsym(p_security, "SecTaskCopyValueForEntitlement");
+        if (t1 && vxInlineHook(t1, (void *)h_stcve, (void **)&o_stcve) == 0) { gHooked++; vxLog(@"[VEEX] +stcve"); }
+        void *t2 = dlsym(p_security, "SecStaticCodeCheckValidity");
+        if (t2 && vxInlineHook(t2, (void *)h_scv, (void **)&o_sscv) == 0) gHooked++;
+        void *t3 = dlsym(p_security, "SecStaticCodeCheckValidityWithErrors");
+        if (t3 && vxInlineHook(t3, (void *)h_scvw, (void **)&o_sscvw) == 0) gHooked++;
+        void *t4 = dlsym(p_security, "SecCodeCheckValidity");
+        if (t4 && vxInlineHook(t4, (void *)h_scv, (void **)&o_scv) == 0) gHooked++;
+        void *t5 = dlsym(p_security, "SecCodeCheckValidityWithErrors");
+        if (t5 && vxInlineHook(t5, (void *)h_scvw, (void **)&o_scvw) == 0) gHooked++;
     }
 #endif
 #if VX_HOOKSET >= 3
@@ -439,9 +442,9 @@ static void vxInstallBody(void) {
 // ============ Attest ============
 static void vxKillAttest(void) {
     Class c = NSClassFromString(@"DCAppAttestService");
-    if (!c) return;
+    if (!c) { vxLog(@"[VEEX] attest sin clase"); return; }
     Method m = class_getInstanceMethod(c, @selector(isSupported));
-    if (m) method_setImplementation(m, imp_implementationWithBlock(^BOOL(id s) { return NO; }));
+    if (m) method_setImplementation(m, imp_implementationWithBlock(^BOOL(id s) { (void)s; return NO; }));
     vxLog(@"[VEEX] attest swz=%d", m ? 1 : 0);
 }
 
@@ -452,8 +455,9 @@ static void vxFingerprint(void) {
 
     void *sec = p_security ? p_security : dlopen("/System/Library/Frameworks/Security.framework/Security", RTLD_NOW);
     if (!sec) return;
-    void *(*mk)(void) = dlsym(sec, "SecTaskCreateFromSelf");
-    CFTypeRef (*get)(void *, CFStringRef, void **) = dlsym(sec, "SecTaskCopyValueForEntitlement");
+    void *(*mk)(void) = (void *(*)(void))dlsym(sec, "SecTaskCreateFromSelf");
+    CFTypeRef (*get)(void *, CFStringRef, void **) = (CFTypeRef (*)(void *, CFStringRef, void **))
+        dlsym(sec, "SecTaskCopyValueForEntitlement");
     if (!mk || !get) return;
     void *t = mk();
     if (!t) return;
@@ -509,7 +513,7 @@ static void vxPatchCryptid(void) {
             vm_protect(mach_task_self(), (uint64_t)h & ~(VX_PG - 1), VX_PG, false,
                        VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY);
             ((struct encryption_info_command_64 *)lc)->cryptid = 1;
-            vxLog(@"[VEEX] cryptid 0->1 %s", _dyld_get_image_name(gMyIdx == 0xFFFFFFFFu ? 0 : 0));
+            vxLog(@"[VEEX] cryptid 0->1 %s", _dyld_get_image_name(0));
         }
         p += lc->cmdsize;
     }
@@ -522,12 +526,11 @@ typedef void *(*f_p1)(void *);
 typedef size_t (*f_s1)(void *);
 typedef void *(*f_i1)(void *, size_t);
 typedef const char *(*f_c1)(void *);
-typedef void *(*f_mi)(void *, void **);
 typedef void *(*f_mf)(void *, const char *, int);
 typedef void *(*f_att)(void *);
 
 static f_v p_dom; static f_asms p_asms; static f_p1 p_img; static f_s1 p_cc;
-static f_i1 p_ci; static f_c1 p_cn; static f_mi p_mi; static f_mf p_mf;
+static f_i1 p_ci; static f_c1 p_cn; static f_mf p_mf;
 static f_att p_att; static f_p1 p_kl;
 static int gI2C = 0;
 
@@ -541,7 +544,6 @@ static void vxLoadIL2CPP(void) {
     R("il2cpp_image_get_class_count", p_cc);
     R("il2cpp_image_get_class", p_ci);
     R("il2cpp_class_get_name", p_cn);
-    R("il2cpp_class_get_methods", p_mi);
     R("il2cpp_class_get_method_from_name", p_mf);
     R("il2cpp_object_get_class", p_kl);
 #undef R
@@ -559,16 +561,22 @@ static vxCmd gCmd[VX_CMAX];
 static volatile int gCmdN = 0;
 static volatile int gDrawLock = 0;
 
-static void vxLock(void) { while (__atomic_test_and_set(&gDrawLock, __ATOMIC_ACQUIRE)) {} }
-static void vxUnlock(void) { __atomic_clear(&gDrawLock, __ATOMIC_RELEASE); }
+static void vxLock(void) {
+    while (__atomic_test_and_set((volatile void *)&gDrawLock, __ATOMIC_ACQUIRE)) {}
+}
+static void vxUnlock(void) { __atomic_clear((volatile void *)&gDrawLock, __ATOMIC_RELEASE); }
 
 @interface VXCanvas : UIView @end
 @implementation VXCanvas
 - (instancetype)initWithFrame:(CGRect)f {
-    if ((self = [super initWithFrame:f])) { self.backgroundColor = UIColor.clearColor; self.userInteractionEnabled = NO; }
+    if ((self = [super initWithFrame:f])) {
+        self.backgroundColor = UIColor.clearColor;
+        self.userInteractionEnabled = NO;
+    }
     return self;
 }
 - (void)drawRect:(CGRect)rect {
+    (void)rect;
     CGContextRef c = UIGraphicsGetCurrentContext();
     vxLock();
     int n = gCmdN;
@@ -601,15 +609,31 @@ static void vxUnlock(void) { __atomic_clear(&gDrawLock, __ATOMIC_RELEASE); }
 }
 @end
 
+@interface VXRow : UIButton
+- (void)vxPaint;
+@end
+@implementation VXRow
+- (void)vxTap {
+    NSString *k = objc_getAssociatedObject(self, "k");
+    if (k) { gCfg[k] = [gCfg[k] boolValue] ? @NO : @YES; [self vxPaint]; }
+}
+- (void)vxPaint {
+    NSString *k = objc_getAssociatedObject(self, "k");
+    BOOL on = [gCfg[k] boolValue];
+    self.backgroundColor = on ? [UIColor colorWithWhite:0.11 alpha:1] : [UIColor colorWithWhite:1 alpha:0.62];
+    [self setTitleColor:on ? UIColor.whiteColor : [UIColor colorWithWhite:0.1 alpha:1] forState:UIControlStateNormal];
+}
+@end
+
 static int l_clear(lua_State *L) { (void)L; vxLock(); gCmdN = 0; vxUnlock(); return 0; }
 static int l_rect(lua_State *L) {
     vxLock();
     if (gCmdN < VX_CMAX) {
         vxCmd *q = &gCmd[gCmdN++];
-        q->t = 0; q->x = luaL_checknumber(L,1); q->y = luaL_checknumber(L,2);
-        q->w = luaL_checknumber(L,3); q->h = luaL_checknumber(L,4);
-        q->r = luaL_optnumber(L,5,1); q->g = luaL_optnumber(L,6,1);
-        q->b = luaL_optnumber(L,7,1); q->a = luaL_optnumber(L,8,1);
+        q->t = 0; q->x = (float)luaL_checknumber(L,1); q->y = (float)luaL_checknumber(L,2);
+        q->w = (float)luaL_checknumber(L,3); q->h = (float)luaL_checknumber(L,4);
+        q->r = (float)luaL_optnumber(L,5,1); q->g = (float)luaL_optnumber(L,6,1);
+        q->b = (float)luaL_optnumber(L,7,1); q->a = (float)luaL_optnumber(L,8,1);
     }
     vxUnlock();
     return 0;
@@ -618,10 +642,10 @@ static int l_line(lua_State *L) {
     vxLock();
     if (gCmdN < VX_CMAX) {
         vxCmd *q = &gCmd[gCmdN++];
-        q->t = 1; q->x = luaL_checknumber(L,1); q->y = luaL_checknumber(L,2);
-        q->w = luaL_checknumber(L,3); q->h = luaL_checknumber(L,4);
-        q->r = luaL_optnumber(L,5,1); q->g = luaL_optnumber(L,6,1);
-        q->b = luaL_optnumber(L,7,1); q->a = luaL_optnumber(L,8,1);
+        q->t = 1; q->x = (float)luaL_checknumber(L,1); q->y = (float)luaL_checknumber(L,2);
+        q->w = (float)luaL_checknumber(L,3); q->h = (float)luaL_checknumber(L,4);
+        q->r = (float)luaL_optnumber(L,5,1); q->g = (float)luaL_optnumber(L,6,1);
+        q->b = (float)luaL_optnumber(L,7,1); q->a = (float)luaL_optnumber(L,8,1);
     }
     vxUnlock();
     return 0;
@@ -631,9 +655,9 @@ static int l_text(lua_State *L) {
     vxLock();
     if (gCmdN < VX_CMAX) {
         vxCmd *q = &gCmd[gCmdN++];
-        q->t = 2; q->x = luaL_checknumber(L,2); q->y = luaL_checknumber(L,3);
-        q->r = luaL_optnumber(L,4,1); q->g = luaL_optnumber(L,5,1);
-        q->b = luaL_optnumber(L,6,1); q->a = luaL_optnumber(L,7,1);
+        q->t = 2; q->x = (float)luaL_checknumber(L,2); q->y = (float)luaL_checknumber(L,3);
+        q->r = (float)luaL_optnumber(L,4,1); q->g = (float)luaL_optnumber(L,5,1);
+        q->b = (float)luaL_optnumber(L,6,1); q->a = (float)luaL_optnumber(L,7,1);
         strncpy(q->s, s, 71); q->s[71] = 0;
     }
     vxUnlock();
@@ -668,7 +692,7 @@ static int l_i2c_class(lua_State *L) {
         size_t c = p_cc(img);
         for (size_t i = 0; i < c; i++) {
             void *kl = p_ci(img, i);
-            if (kl && !strcmp(p_cn(kl), cls)) { lua_pushinteger(L, (lua_Integer)kl); return 1; }
+            if (kl && !strcmp(p_cn(kl), cls)) { lua_pushinteger(L, (lua_Integer)(uintptr_t)kl); return 1; }
         }
     }
     lua_pushnil(L);
@@ -680,14 +704,14 @@ static int l_i2c_mptr(lua_State *L) {
     const char *mth = luaL_checkstring(L,2);
     int argc = (int)luaL_optinteger(L,3,0);
     if (!gI2C || !kl) { lua_pushnil(L); return 1; }
-    void *m = p_mf((void *)kl, mth, argc);
+    void *m = p_mf((void *)(uintptr_t)kl, mth, argc);
     if (m) lua_pushinteger(L, *(uint64_t *)m); else lua_pushnil(L);
     return 1;
 }
 
 static int l_kl(lua_State *L) {
     uint64_t o = (uint64_t)luaL_checkinteger(L,1);
-    lua_pushinteger(L, o ? (lua_Integer)p_kl((void *)o) : 0);
+    lua_pushinteger(L, o ? (lua_Integer)(uintptr_t)p_kl((void *)(uintptr_t)o) : 0);
     return 1;
 }
 
@@ -696,25 +720,25 @@ static int l_call(lua_State *L) {
     uint64_t f = (uint64_t)luaL_checkinteger(L,1);
     uint64_t a = (uint64_t)luaL_optinteger(L,2,0), b = (uint64_t)luaL_optinteger(L,3,0);
     uint64_t c = (uint64_t)luaL_optinteger(L,4,0), d = (uint64_t)luaL_optinteger(L,5,0);
-    lua_pushinteger(L, f ? ((f_c4)f)(a,b,c,d) : 0);
+    lua_pushinteger(L, f ? (lua_Integer)((f_c4)(uintptr_t)f)(a,b,c,d) : 0);
     return 1;
 }
 static int l_callv(lua_State *L) {
     uint64_t f = (uint64_t)luaL_checkinteger(L,1);
     uint64_t a = (uint64_t)luaL_optinteger(L,3,0);
-    lua_pushinteger(L, f ? ((f_c4)f)(a,0,0,0) : 0);
+    lua_pushinteger(L, f ? (lua_Integer)((f_c4)(uintptr_t)f)(a,0,0,0) : 0);
     return 1;
 }
 
 static int l_arrlen(lua_State *L) {
     uint64_t a = (uint64_t)luaL_checkinteger(L,1);
-    lua_pushinteger(L, a ? *(uint32_t *)(a + 0x18) : 0);
+    lua_pushinteger(L, a ? *(uint32_t *)(uintptr_t)(a + 0x18) : 0);
     return 1;
 }
 static int l_arrat(lua_State *L) {
     uint64_t a = (uint64_t)luaL_checkinteger(L,1);
     int i = (int)luaL_checkinteger(L,2);
-    lua_pushinteger(L, a ? *(uint64_t *)(a + 0x20 + (uint64_t)i * 8) : 0);
+    lua_pushinteger(L, a ? *(uint64_t *)(uintptr_t)(a + 0x20 + (uint64_t)i * 8) : 0);
     return 1;
 }
 
@@ -722,14 +746,14 @@ typedef struct { float x, y, z; } vx3f;
 static int l_pos3(lua_State *L) {
     uint64_t f = (uint64_t)luaL_checkinteger(L,1);
     uint64_t o = (uint64_t)luaL_checkinteger(L,2);
-    vx3f r = ((vx3f (*)(uint64_t))f)(o);
+    vx3f r = ((vx3f (*)(uint64_t))(uintptr_t)f)(o);
     lua_pushnumber(L, r.x); lua_pushnumber(L, r.y); lua_pushnumber(L, r.z);
     return 3;
 }
 static int l_gete(lua_State *L) {
     uint64_t f = (uint64_t)luaL_checkinteger(L,1);
     uint64_t o = (uint64_t)luaL_checkinteger(L,2);
-    vx3f r = ((vx3f (*)(uint64_t))f)(o);
+    vx3f r = ((vx3f (*)(uint64_t))(uintptr_t)f)(o);
     lua_pushnumber(L, r.x); lua_pushnumber(L, r.y); lua_pushnumber(L, r.z);
     return 3;
 }
@@ -737,17 +761,17 @@ static int l_sete(lua_State *L) {
     uint64_t f = (uint64_t)luaL_checkinteger(L,1);
     uint64_t o = (uint64_t)luaL_checkinteger(L,2);
     float x = (float)luaL_checknumber(L,3), y = (float)luaL_checknumber(L,4), z = (float)luaL_checknumber(L,5);
-    ((void (*)(uint64_t, float, float, float))f)(o, x, y, z);
+    ((void (*)(uint64_t, float, float, float))(uintptr_t)f)(o, x, y, z);
     return 0;
 }
 
 static int l_str(lua_State *L) {
     uint64_t s = (uint64_t)luaL_checkinteger(L,1);
     if (!s) { lua_pushstring(L, ""); return 1; }
-    int32_t len = *(int32_t *)(s + 0x10);
+    int32_t len = *(int32_t *)(uintptr_t)(s + 0x10);
     if (len < 0 || len > 64) len = 64;
     char out[200]; int k = 0;
-    const uint16_t *ch = (const uint16_t *)(s + 0x14);
+    const uint16_t *ch = (const uint16_t *)(uintptr_t)(s + 0x14);
     for (int32_t i = 0; i < len && k < 190; i++) {
         uint16_t c = ch[i];
         out[k++] = (c < 0x80) ? (char)c : '?';
@@ -791,8 +815,8 @@ static void vxRunScript(void) {
     lua_register(gL, "arrlen", l_arrlen); lua_register(gL, "arrat", l_arrat);
     lua_register(gL, "pos3", l_pos3); lua_register(gL, "gete", l_gete);
     lua_register(gL, "sete", l_sete); lua_register(gL, "str", l_str);
-    lua_pushinteger(gL, gBase); lua_setglobal(gL, "BASE");
-    lua_pushinteger(gL, gSize); lua_setglobal(gL, "SIZE");
+    lua_pushinteger(gL, (lua_Integer)gBase); lua_setglobal(gL, "BASE");
+    lua_pushinteger(gL, (lua_Integer)gSize); lua_setglobal(gL, "SIZE");
     lua_pushstring(gL, gDocs.UTF8String); lua_setglobal(gL, "DOC");
 
     if (luaL_dofile(gL, path.UTF8String) != LUA_OK) {
@@ -820,17 +844,6 @@ static void vxRunScript(void) {
 }
 
 // ============ UI ============
-@interface VXRow : UIButton @end
-@implementation VXRow
-- (void)vxTap { NSString *k = objc_getAssociatedObject(self, "k"); if (k) { gCfg[k] = [gCfg[k] boolValue] ? @NO : @YES; [self vxPaint]; } }
-- (void)vxPaint {
-    NSString *k = objc_getAssociatedObject(self, "k");
-    BOOL on = [gCfg[k] boolValue];
-    self.backgroundColor = on ? [UIColor colorWithWhite:0.11 alpha:1] : [UIColor colorWithWhite:1 alpha:0.62];
-    [self setTitleColor:on ? UIColor.whiteColor : [UIColor colorWithWhite:0.1 alpha:1] forState:UIControlStateNormal];
-}
-@end
-
 static void vxBuildTab(void);
 
 static void addRow(NSString *title, NSString *key, CGFloat y) {
@@ -847,8 +860,8 @@ static void addRow(NSString *title, NSString *key, CGFloat y) {
 
 static void vxBuildTab(void) {
     for (UIView *v in gContent.subviews) [v removeFromSuperview];
-    for (int i = 0; i < gTabBtns.count; i++) {
-        UIButton *t = gTabBtns[i];
+    for (int i = 0; i < (int)gTabBtns.count; i++) {
+        UIButton *t = (UIButton *)gTabBtns[i];
         BOOL on = (i == gTab);
         t.backgroundColor = on ? [UIColor colorWithWhite:0.11 alpha:1] : [UIColor colorWithWhite:1 alpha:0.6];
         [t setTitleColor:on ? UIColor.whiteColor : [UIColor colorWithWhite:0.1 alpha:1] forState:UIControlStateNormal];
@@ -887,10 +900,21 @@ static void vxResetGuest(void) {
     SecItemDelete((__bridge CFDictionaryRef)@{(__bridge id)kSecClass:(__bridge id)kSecClassInternetPassword});
     NSString *pref = @"/var/mobile/Library/Preferences";
     for (NSString *f in [[NSFileManager defaultManager] contentsOfDirectoryAtPath:pref error:nil])
-        if ([f hasPrefix:@"com.dts.freefireth"]) [[NSFileManager defaultManager] removeItemAtPath:[pref stringByAppendingPathComponent:f] error:nil];
+        if ([f hasPrefix:@"com.dts.freefireth"])
+            [[NSFileManager defaultManager] removeItemAtPath:[pref stringByAppendingPathComponent:f] error:nil];
     vxLog(@"[VEEX] RESET hecho, cierra el juego");
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ exit(0); });
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{ exit(0); });
 }
+
+@interface VXRoot (Actions)
+- (void)vxDoClose;
+- (void)vxDoTab:(UIButton *)b;
+- (void)vxDoHook;
+- (void)vxDoRun;
+- (void)vxDoStop;
+- (void)vxDoCopy;
+@end
 
 static void buildUI(UIWindowScene *sc) {
     gCfg = [NSMutableDictionary dictionary];
@@ -921,7 +945,7 @@ static void buildUI(UIWindowScene *sc) {
     gPanel = [[UIView alloc] initWithFrame:CGRectMake(W - 250, 44, 238, ph)];
     gPanel.layer.cornerRadius = 18;
     gPanel.clipsToBounds = YES;
-    gPanel.backgroundColor = [UIColor colorWithWhite:1 alpha:0.9];
+    gPanel.backgroundColor = [UIColor colorWithWhite:1 alpha:0.92];
     gPanel.hidden = YES;
     [gRoot addSubview:gPanel];
 
@@ -929,11 +953,11 @@ static void buildUI(UIWindowScene *sc) {
     head.backgroundColor = [UIColor colorWithWhite:0.11 alpha:1];
     [gPanel addSubview:head];
 
-    UILabel *t = [[UILabel alloc] initWithFrame:CGRectMake(12, 0, 120, 36)];
-    t.text = @"VEEX 61";
-    t.textColor = UIColor.whiteColor;
-    t.font = [UIFont monospacedSystemFontOfSize:14 weight:UIFontWeightBold];
-    [head addSubview:t];
+    UILabel *ttl = [[UILabel alloc] initWithFrame:CGRectMake(12, 0, 120, 36)];
+    ttl.text = @"VEEX 62";
+    ttl.textColor = UIColor.whiteColor;
+    ttl.font = [UIFont monospacedSystemFontOfSize:14 weight:UIFontWeightBold];
+    [head addSubview:ttl];
 
     UIButton *hook = [UIButton buttonWithType:UIButtonTypeSystem];
     hook.frame = CGRectMake(150, 6, 46, 24);
@@ -950,7 +974,7 @@ static void buildUI(UIWindowScene *sc) {
 
     NSArray *names = @[@"ESP", @"AIM", @"DRAW", @"MISC", @"SET"];
     NSMutableArray *btns = [NSMutableArray array];
-    for (int i = 0; i < names.count; i++) {
+    for (int i = 0; i < (int)names.count; i++) {
         UIButton *b = [UIButton buttonWithType:UIButtonTypeCustom];
         b.frame = CGRectMake(8 + i * 44, 42, 40, 26);
         b.tag = i;
@@ -966,7 +990,8 @@ static void buildUI(UIWindowScene *sc) {
     gContent = [[UIView alloc] initWithFrame:CGRectMake(0, 72, 238, 190)];
     [gPanel addSubview:gContent];
 
-    gLogView = [[UITextView alloc] initWithFrame:CGRectMake(8, 266, 222, ph - 316)];
+    CGFloat lh = MAX(90, ph - 316);
+    gLogView = [[UITextView alloc] initWithFrame:CGRectMake(8, 266, 222, lh)];
     gLogView.backgroundColor = [UIColor colorWithWhite:0.96 alpha:1];
     gLogView.layer.cornerRadius = 8;
     gLogView.editable = NO;
@@ -1058,7 +1083,6 @@ __attribute__((constructor)) static void vxInit(void) {
                 NSString *tail = prev.length > 3000 ? [prev substringFromIndex:prev.length - 3000] : prev;
                 vxLog(@"--- anterior ---\n%@", tail);
             }
-            vxWriteSync(@"");
             [@"" writeToFile:lp atomically:YES encoding:NSUTF8StringEncoding error:nil];
 
             vxLoadIL2CPP();
