@@ -18,9 +18,9 @@
 #include "lauxlib.h"
 #include "lualib.h"
 
-// ===== etapa 6, conjunto de hooks 1 =====
+// ===== etapa 6, conjunto de hooks 0 (sin hooks) =====
 #define VX_STAGE 6
-#define VX_HOOKSET 1
+#define VX_HOOKSET 0
 #define VX_FPS 20
 
 #define SCRIPT_API @"https://api.github.com/repos/lyvstoremx/VEEX-IPA/contents/scripts/esp.lua"
@@ -905,6 +905,7 @@ static unsigned char *(*o_sha256)(const void *, CC_LONG, unsigned char *) = NULL
 
 static uint32_t gMyIdx = 0xFFFFFFFFu;
 static uint64_t gMainHdr = 0;
+static int gHitMd5 = 0, gHitSha1 = 0, gHitSha256 = 0;
 
 static uint32_t h_dyld_image_count(void) {
     uint32_t n = o_dyld_image_count ? o_dyld_image_count() : 0;
@@ -999,7 +1000,7 @@ static unsigned char *h_md5(const void *d, CC_LONG len, unsigned char *md) {
     unsigned char *r = o_md5 ? o_md5(d, len, md) : NULL;
     if (r && d && len == 29 && !memcmp(d, "com.dts.freefireth_", 19)) {
         vxHex(VX_MD5ID, md, 16);
-        vxLog(@"[VEEX] md5 id forzado");
+        gHitMd5++;
     }
     return r;
 }
@@ -1010,7 +1011,7 @@ static unsigned char *h_sha1(const void *d, CC_LONG len, unsigned char *md) {
         const unsigned char *b = (const unsigned char *)d;
         if (b[0] == 0xfa && b[1] == 0xde && b[2] == 0x0c && b[3] == 0x02) {
             vxHex(VX_CD, md, 20);
-            vxLog(@"[VEEX] cdhash forzado");
+            gHitSha1++;
         }
     }
     return r;
@@ -1020,7 +1021,7 @@ static unsigned char *h_sha256(const void *d, CC_LONG len, unsigned char *md) {
     unsigned char *r = o_sha256 ? o_sha256(d, len, md) : NULL;
     if (r && d && (uint64_t)d == gMainHdr) {
         vxHex(VX_H, md, 32);
-        vxLog(@"[VEEX] h forzado len=%u", (unsigned)len);
+        gHitSha256++;
     }
     return r;
 }
@@ -1115,11 +1116,13 @@ static void vxPatchLoadName(void) {
 }
 
 static void vxInstallHooks(void) {
+#if VX_HOOKSET >= 1
     vxHookName("CC_MD5",                         (void *)h_md5,    (void **)&o_md5);
     vxHookName("CC_SHA1",                        (void *)h_sha1,   (void **)&o_sha1);
     vxHookName("CC_SHA256",                      (void *)h_sha256, (void **)&o_sha256);
+#endif
 #if VX_HOOKSET >= 2
-    vxHookName("SecTaskCopyValueForEntitlement", (void *)h_stcve,  (void **)&o_stcve);
+    vxHookName("SecTaskCopyValueForEntitlement",       (void *)h_stcve, (void **)&o_stcve);
     vxHookName("SecStaticCodeCheckValidity",           (void *)h_sscv,  (void **)&o_sscv);
     vxHookName("SecStaticCodeCheckValidityWithErrors", (void *)h_sscvw, (void **)&o_sscvw);
     vxHookName("SecCodeCheckValidity",                 (void *)h_scv,   (void **)&o_scv);
@@ -1327,7 +1330,7 @@ static void buildUI(void) {
         [b addTarget:b action:sels[i] forControlEvents:UIControlEventTouchUpInside];
         [foot addArrangedSubview:b];
     }
-    vxLog(@"[VEEX] UI lista");
+    vxLog(@"[VEEX] UI lista · hits md5=%d sha1=%d sha256=%d", gHitMd5, gHitSha1, gHitSha256);
 }
 
 // ============ ARRANQUE ============
@@ -1342,7 +1345,7 @@ __attribute__((constructor)) static void vxInit(void) {
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
         @autoreleasepool {
             if (!gLog) gLog = [NSMutableString new];
-            vxLog(@"[VEEX] init stage=%d", VX_STAGE);
+            vxLog(@"[VEEX] init stage=%d set=%d", VX_STAGE, VX_HOOKSET);
             vxLoadIL2CPP();
 
             for (int i = 0; i < 40 && !gBase; i++) {
