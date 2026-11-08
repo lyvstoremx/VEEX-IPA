@@ -7,6 +7,7 @@
 #import <objc/runtime.h>
 #import <objc/message.h>
 #import <mach/mach.h>
+#import <mach/vm_map.h>
 #import <mach/mach_vm.h>
 #import <mach-o/dyld.h>
 #import <mach-o/loader.h>
@@ -124,7 +125,7 @@ static int vxInlineHook(void *target, void *rep, void **origOut) {
     }
 
     vm_address_t tr = 0;
-    if (vm_allocate(mach_task_self(), &tr, VX_PG, VM_FLAGS_ANYWHERE) != KERN_SUCCESS) return -6;
+    if (vm_allocate(mach_task_self(), &tr, VX_PG, 1) != KERN_SUCCESS) return -6;
 
     memcpy((void *)tr, t, 16);
     uint32_t *w = (uint32_t *)(tr + 16);
