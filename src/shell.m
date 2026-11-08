@@ -16,7 +16,7 @@
 #include "lauxlib.h"
 #include "lualib.h"
 
-// ===== etapa 3: hooks + App Attest anulado, sin cryptid =====
+// ===== etapa 3: hooks + App Attest anulado + huella de firma =====
 #define VX_STAGE 3
 #define VX_FPS 20
 
@@ -905,6 +905,25 @@ static void vxKillAttest(void) {
     vxLog(@"[VEEX] attest swz=%d", n);
 }
 
+// ===== huella: qué puede leer el juego de su propia firma =====
+static void vxFingerprint(void) {
+    NSBundle *b = [NSBundle mainBundle];
+    vxLog(@"[VEEX] bundle=%@", b.bundleIdentifier);
+    vxLog(@"[VEEX] exe=%@", b.executablePath);
+    SecTaskRef t = SecTaskCreateFromSelf(kCFAllocatorDefault);
+    if (!t) { vxLog(@"[VEEX] sin SecTask"); return; }
+    const char *keys[] = { "application-identifier", "com.apple.developer.team-identifier",
+                           "get-task-allow", "beta-reports-active", "aps-environment" };
+    for (int i = 0; i < 5; i++) {
+        CFStringRef k = CFStringCreateWithCString(kCFAllocatorDefault, keys[i], kCFStringEncodingUTF8);
+        CFTypeRef v = SecTaskCopyValueForEntitlement(t, k, NULL);
+        vxLog(@"[VEEX] ent %s=%@", keys[i], v ? (__bridge id)v : @"(nil)");
+        if (v) CFRelease(v);
+        CFRelease(k);
+    }
+    CFRelease(t);
+}
+
 static void vxFindSelf(void) {
     Dl_info di;
     if (!dladdr((void *)&vxFindSelf, &di) || !di.dli_fbase) return;
@@ -964,6 +983,7 @@ static void vxInstallHooks(void) {
     vxPatchLoadName();
     vxKillAttest();
     vxLog(@"[VEEX] hooks=%d idx=%u", e, gMyIdx);
+    vxFingerprint();
 }
 
 // ============ UI BUILD ============
@@ -1101,7 +1121,7 @@ static void buildUI(void) {
     [p0 addArrangedSubview:vxRow(@"Línea",      vxSw(@"line", YES))];
     [p0 addArrangedSubview:vxRow(@"Nombre",     vxSw(@"name", YES))];
     [p0 addArrangedSubview:vxRow(@"Distancia",  vxSw(@"dist", YES))];
-    [p0 addArrangedSubview:vxRow(@"Salud",      vxSw(@"hp", YES))];
+    [p0 addArrangedSubview:vxRow(@"Salud",      vxSw("hp", YES))];
 
     UIStackView *p1 = [[UIStackView alloc] initWithFrame:gPages[1].bounds];
     p1.axis = UILayoutConstraintAxisVertical; p1.spacing = 5;
