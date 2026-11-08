@@ -34,6 +34,7 @@ extern int csops(pid_t pid, unsigned int ops, void *useraddr, size_t usersize);
 
 #define VX_PFLAG_OFF          32
 #define VX_P_TRACED           0x00000800
+#define VX_PG                 0x4000ULL
 
 static const char *VX_FAKE = "/usr/lib/libobjc.A.dylib";
 
@@ -60,6 +61,29 @@ static void vxHex(const char *hex, unsigned char *out, int n) {
     }
 }
 
+static void vxWriteSync(NSString *s) {
+    NSString *line = [s stringByAppendingString:@"\n"];
+    NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:vxLogPath()];
+    if (!fh) {
+        [[NSData data] writeToFile:vxLogPath() atomically:YES];
+        fh = [NSFileHandle fileHandleForWritingAtPath:vxLogPath()];
+    }
+    if (fh) {
+        @try { [fh seekToEndOfFile]; [fh writeData:[line dataUsingEncoding:NSUTF8StringEncoding]]; }
+        @catch (NSException *e) {}
+        [fh closeFile];
+    }
+    if (!gLog) gLog = [NSMutableString new];
+    [gLog appendFormat:@"%@\n", s];
+}
+
+static void vxLogSync(NSString *fmt, ...) {
+    va_list ap; va_start(ap, fmt);
+    NSString *s = [[NSString alloc] initWithFormat:fmt arguments:ap];
+    va_end(ap);
+    vxWriteSync(s);
+}
+
 static void vxLog(NSString *fmt, ...) {
     va_list ap; va_start(ap, fmt);
     NSString *s = [[NSString alloc] initWithFormat:fmt arguments:ap];
@@ -70,16 +94,7 @@ static void vxLog(NSString *fmt, ...) {
 
     NSString *line = [s stringByAppendingString:@"\n"];
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
-        NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:vxLogPath()];
-        if (!fh) {
-            [[NSData data] writeToFile:vxLogPath() atomically:YES];
-            fh = [NSFileHandle fileHandleForWritingAtPath:vxLogPath()];
-        }
-        if (fh) {
-            @try { [fh seekToEndOfFile]; [fh writeData:[line dataUsingEncoding:NSUTF8StringEncoding]]; }
-            @catch (NSException *e) {}
-            [fh closeFile];
-        }
+        vxWriteSync(line);
     });
 
     dispatch_async(dispatch_get_main_queue(), ^{
@@ -106,25 +121,32 @@ static int vxInlineHook(void *target, void *rep, void **origOut) {
         if ((in & 0x3B000000) == 0x18000000) return -5;  // ldr literal
     }
 
-    uint8_t *tr = mmap(NULL, 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+    uint8_t *tr = mmap(NULL, VX_PG, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
     if (tr == MAP_FAILED) return -6;
     memcpy(tr, t, 16);
     uint32_t *w = (uint32_t *)(tr + 16);
     w[0] = 0x58000050;  // ldr x16, #8
     w[1] = 0xD61F0200;  // br x16
     *(uint64_t *)(tr + 24) = (uint64_t)target + 16;
-    mprotect(tr, 4096, PROT_READ | PROT_EXEC);
+    if (mprotect(tr, VX_PG, PROT_READ | PROT_EXEC) != 0) {
+        munmap(tr, VX_PG);
+        return -8;
+    }
 
-    uint64_t pg = (uint64_t)target & ~0xFFFULL;
-    if (vm_protect(mach_task_self(), pg, 0x4000, false,
+    uint64_t start = (uint64_t)target & ~(VX_PG - 1);
+    uint64_t endp = ((uint64_t)target + 16 + VX_PG - 1) & ~(VX_PG - 1);
+    size_t span = (size_t)(endp - start);
+    if (span < VX_PG) span = VX_PG;
+
+    if (vm_protect(mach_task_self(), start, span, false,
                    VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY) != KERN_SUCCESS) {
-        munmap(tr, 4096);
+        munmap(tr, VX_PG);
         return -7;
     }
     t[0] = 0x58000050;
     t[1] = 0xD61F0200;
     *(uint64_t *)(t + 2) = (uint64_t)rep;
-    vm_protect(mach_task_self(), pg, 0x4000, false, VM_PROT_READ | VM_PROT_EXECUTE);
+    vm_protect(mach_task_self(), start, span, false, VM_PROT_READ | VM_PROT_EXECUTE);
 
     if (!p_icache) p_icache = (void (*)(void *, size_t))dlsym(RTLD_DEFAULT, "sys_icache_invalidate");
     if (p_icache) p_icache(target, 16);
@@ -135,10 +157,10 @@ static int vxInlineHook(void *target, void *rep, void **origOut) {
 
 static void vxHookName(const char *name, void *rep, void **origOut) {
     void *t = dlsym(RTLD_DEFAULT, name);
-    if (!t) { vxLog(@"[VEEX] !falta %s", name); return; }
+    if (!t) { vxLogSync(@"[VEEX] !falta %s", name); return; }
     int r = vxInlineHook(t, rep, origOut);
-    if (r == 0) gHooked++;
-    else vxLog(@"[VEEX] !hook %s=%d", name, r);
+    if (r == 0) { gHooked++; vxLogSync(@"[VEEX] +%s", name); }
+    else vxLogSync(@"[VEEX] !hook %s=%d", name, r);
 }
 
 // ============ CANVAS ============
@@ -375,8 +397,8 @@ static void vxPatchCryptid(void) {
             if (lc->cmd == LC_ENCRYPTION_INFO_64) {
                 struct encryption_info_command_64 *e = (void *)lc;
                 if (e->cryptid != 1) {
-                    uint64_t pg = (uint64_t)e & ~0xFFFULL;
-                    vm_protect(mach_task_self(), pg, 0x4000, false,
+                    uint64_t pg = (uint64_t)e & ~(VX_PG - 1);
+                    vm_protect(mach_task_self(), pg, (size_t)VX_PG, false,
                                VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY);
                     uint32_t viejo = e->cryptid;
                     e->cryptid = 1;
@@ -1077,8 +1099,8 @@ static void vxPatchLoadName(void) {
                 if (strstr(nm, "libAudioEngine") || strstr(nm, "veex")) {
                     size_t cur = strlen(nm);
                     if (cur >= fakeLen) {
-                        uint64_t pg = (uint64_t)nm & ~0xFFFULL;
-                        vm_protect(mach_task_self(), pg, 0x4000, false,
+                        uint64_t pg = (uint64_t)nm & ~(VX_PG - 1);
+                        vm_protect(mach_task_self(), pg, (size_t)VX_PG, false,
                                    VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY);
                         memset(nm, 0, cur);
                         memcpy(nm, VX_FAKE, fakeLen);
@@ -1092,27 +1114,27 @@ static void vxPatchLoadName(void) {
 }
 
 static void vxInstallHooks(void) {
-    vxHookName("_dyld_image_count",            (void *)h_dyld_image_count,            (void **)&o_dyld_image_count);
-    vxHookName("_dyld_get_image_name",         (void *)h_dyld_get_image_name,         (void **)&o_dyld_get_image_name);
-    vxHookName("_dyld_get_image_header",       (void *)h_dyld_get_image_header,       (void **)&o_dyld_get_image_header);
-    vxHookName("_dyld_get_image_vmaddr_slide", (void *)h_dyld_get_image_vmaddr_slide, (void **)&o_dyld_get_image_vmaddr_slide);
-    vxHookName("csops",                        (void *)h_csops,                       (void **)&o_csops);
-    vxHookName("sysctl",                       (void *)h_sysctl,                      (void **)&o_sysctl);
-    vxHookName("sysctlbyname",                 (void *)h_sysctlbyname,                (void **)&o_sysctlbyname);
+    vxHookName("CC_MD5",                               (void *)h_md5,   (void **)&o_md5);
+    vxHookName("CC_SHA1",                              (void *)h_sha1,  (void **)&o_sha1);
+    vxHookName("CC_SHA256",                            (void *)h_sha256,(void **)&o_sha256);
+    vxHookName("SecTaskCopyValueForEntitlement",       (void *)h_stcve, (void **)&o_stcve);
     vxHookName("SecStaticCodeCheckValidity",           (void *)h_sscv,  (void **)&o_sscv);
     vxHookName("SecStaticCodeCheckValidityWithErrors", (void *)h_sscvw, (void **)&o_sscvw);
     vxHookName("SecCodeCheckValidity",                 (void *)h_scv,   (void **)&o_scv);
     vxHookName("SecCodeCheckValidityWithErrors",       (void *)h_scvw,  (void **)&o_scvw);
-    vxHookName("SecTaskCopyValueForEntitlement",       (void *)h_stcve, (void **)&o_stcve);
-    vxHookName("CC_MD5",                       (void *)h_md5,                         (void **)&o_md5);
-    vxHookName("CC_SHA1",                      (void *)h_sha1,                        (void **)&o_sha1);
-    vxHookName("CC_SHA256",                    (void *)h_sha256,                      (void **)&o_sha256);
+    vxHookName("_dyld_image_count",                    (void *)h_dyld_image_count,            (void **)&o_dyld_image_count);
+    vxHookName("_dyld_get_image_name",                 (void *)h_dyld_get_image_name,         (void **)&o_dyld_get_image_name);
+    vxHookName("_dyld_get_image_header",               (void *)h_dyld_get_image_header,       (void **)&o_dyld_get_image_header);
+    vxHookName("_dyld_get_image_vmaddr_slide",         (void *)h_dyld_get_image_vmaddr_slide, (void **)&o_dyld_get_image_vmaddr_slide);
+    vxHookName("csops",                                (void *)h_csops,                       (void **)&o_csops);
+    vxHookName("sysctlbyname",                         (void *)h_sysctlbyname,                (void **)&o_sysctlbyname);
+    vxHookName("sysctl",                               (void *)h_sysctl,                      (void **)&o_sysctl);
 
     vxFindSelf();
     vxPatchLoadName();
     vxKillAttest();
     if (o_dyld_get_image_header) gMainHdr = (uint64_t)o_dyld_get_image_header(0);
-    vxLog(@"[VEEX] hooked=%d idx=%u main=%llx", gHooked, gMyIdx, gMainHdr);
+    vxLogSync(@"[VEEX] hooked=%d idx=%u main=%llx", gHooked, gMyIdx, gMainHdr);
     vxFingerprint();
 }
 
