@@ -16,8 +16,8 @@
 #include "lauxlib.h"
 #include "lualib.h"
 
-// ===== CAMBIO 1: etapa 3 (ocultamiento + firma + depuración) =====
-#define VX_STAGE 3
+// ===== CAMBIO 1: etapa 4 (cryptid + ocultamiento + firma + depuración) =====
+#define VX_STAGE 4
 #define VX_FPS 20
 
 #define SCRIPT_API @"https://api.github.com/repos/lyvstoremx/VEEX-IPA/contents/scripts/esp.lua"
@@ -293,25 +293,33 @@ static void vxFindImage(void) {
     }
 }
 
+// ===== CAMBIO 2: forzar cryptid=1 en todas las imágenes =====
 static void vxPatchCryptid(void) {
-    if (!gBase) { vxLog(@"[VEEX] sin base"); return; }
-    const struct mach_header_64 *h = (const void *)gBase;
-    const struct load_command *lc = (const struct load_command *)(h + 1);
-    for (uint32_t k = 0; k < h->ncmds; k++) {
-        if (lc->cmd == LC_ENCRYPTION_INFO_64) {
-            struct encryption_info_command_64 *e = (void *)lc;
-            if (e->cryptid != 0) {
-                uint64_t pg = (uint64_t)e & ~0xFFFULL;
-                vm_protect(mach_task_self(), pg, 0x4000, false,
-                           VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY);
-                e->cryptid = 0;
-                vxLog(@"[VEEX] cryptid parcheado");
+    uint32_t n = _dyld_image_count();
+    int hechos = 0;
+    for (uint32_t i = 0; i < n; i++) {
+        const struct mach_header_64 *h =
+            (const struct mach_header_64 *)_dyld_get_image_header(i);
+        if (!h || h->magic != MH_MAGIC_64) continue;
+        const struct load_command *lc = (const struct load_command *)(h + 1);
+        for (uint32_t k = 0; k < h->ncmds; k++) {
+            if (lc->cmd == LC_ENCRYPTION_INFO_64) {
+                struct encryption_info_command_64 *e = (void *)lc;
+                if (e->cryptid != 1) {
+                    uint64_t pg = (uint64_t)e & ~0xFFFULL;
+                    vm_protect(mach_task_self(), pg, 0x4000, false,
+                               VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY);
+                    uint32_t viejo = e->cryptid;
+                    e->cryptid = 1;
+                    vxLog(@"[VEEX] cryptid %u->1", viejo);
+                    hechos++;
+                }
+                break;
             }
-            return;
+            lc = (const struct load_command *)((uint8_t *)lc + lc->cmdsize);
         }
-        lc = (const struct load_command *)((uint8_t *)lc + lc->cmdsize);
     }
-    vxLog(@"[VEEX] sin LC_ENCRYPTION_INFO_64");
+    vxLog(@"[VEEX] cryptid imgs=%d", hechos);
 }
 
 // ============ IL2CPP ============
@@ -1149,7 +1157,6 @@ __attribute__((constructor)) static void vxInit(void) {
             vxInstallHooks();
 #endif
             [NSThread sleepForTimeInterval:2.0];
-// ===== CAMBIO 2: cryptid apagado en esta prueba (queda en 4) =====
 #if VX_STAGE >= 4
             vxPatchCryptid();
 #endif
