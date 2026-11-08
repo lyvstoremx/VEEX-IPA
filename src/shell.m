@@ -18,8 +18,9 @@
 #include "lauxlib.h"
 #include "lualib.h"
 
-// ===== etapa 6: hooks inline (chained fixups) =====
+// ===== etapa 6, conjunto de hooks 1 =====
 #define VX_STAGE 6
+#define VX_HOOKSET 1
 #define VX_FPS 20
 
 #define SCRIPT_API @"https://api.github.com/repos/lyvstoremx/VEEX-IPA/contents/scripts/esp.lua"
@@ -1114,21 +1115,27 @@ static void vxPatchLoadName(void) {
 }
 
 static void vxInstallHooks(void) {
-    vxHookName("CC_MD5",                               (void *)h_md5,   (void **)&o_md5);
-    vxHookName("CC_SHA1",                              (void *)h_sha1,  (void **)&o_sha1);
-    vxHookName("CC_SHA256",                            (void *)h_sha256,(void **)&o_sha256);
-    vxHookName("SecTaskCopyValueForEntitlement",       (void *)h_stcve, (void **)&o_stcve);
+    vxHookName("CC_MD5",                         (void *)h_md5,    (void **)&o_md5);
+    vxHookName("CC_SHA1",                        (void *)h_sha1,   (void **)&o_sha1);
+    vxHookName("CC_SHA256",                      (void *)h_sha256, (void **)&o_sha256);
+#if VX_HOOKSET >= 2
+    vxHookName("SecTaskCopyValueForEntitlement", (void *)h_stcve,  (void **)&o_stcve);
     vxHookName("SecStaticCodeCheckValidity",           (void *)h_sscv,  (void **)&o_sscv);
     vxHookName("SecStaticCodeCheckValidityWithErrors", (void *)h_sscvw, (void **)&o_sscvw);
     vxHookName("SecCodeCheckValidity",                 (void *)h_scv,   (void **)&o_scv);
     vxHookName("SecCodeCheckValidityWithErrors",       (void *)h_scvw,  (void **)&o_scvw);
-    vxHookName("_dyld_image_count",                    (void *)h_dyld_image_count,            (void **)&o_dyld_image_count);
-    vxHookName("_dyld_get_image_name",                 (void *)h_dyld_get_image_name,         (void **)&o_dyld_get_image_name);
-    vxHookName("_dyld_get_image_header",               (void *)h_dyld_get_image_header,       (void **)&o_dyld_get_image_header);
-    vxHookName("_dyld_get_image_vmaddr_slide",         (void *)h_dyld_get_image_vmaddr_slide, (void **)&o_dyld_get_image_vmaddr_slide);
-    vxHookName("csops",                                (void *)h_csops,                       (void **)&o_csops);
-    vxHookName("sysctlbyname",                         (void *)h_sysctlbyname,                (void **)&o_sysctlbyname);
-    vxHookName("sysctl",                               (void *)h_sysctl,                      (void **)&o_sysctl);
+#endif
+#if VX_HOOKSET >= 3
+    vxHookName("_dyld_image_count",            (void *)h_dyld_image_count,            (void **)&o_dyld_image_count);
+    vxHookName("_dyld_get_image_name",         (void *)h_dyld_get_image_name,         (void **)&o_dyld_get_image_name);
+    vxHookName("_dyld_get_image_header",       (void *)h_dyld_get_image_header,       (void **)&o_dyld_get_image_header);
+    vxHookName("_dyld_get_image_vmaddr_slide", (void *)h_dyld_get_image_vmaddr_slide, (void **)&o_dyld_get_image_vmaddr_slide);
+#endif
+#if VX_HOOKSET >= 4
+    vxHookName("csops",        (void *)h_csops,        (void **)&o_csops);
+    vxHookName("sysctlbyname", (void *)h_sysctlbyname, (void **)&o_sysctlbyname);
+    vxHookName("sysctl",       (void *)h_sysctl,       (void **)&o_sysctl);
+#endif
 
     vxFindSelf();
     vxPatchLoadName();
