@@ -1,4 +1,4 @@
-// src/shell.m — VEEX build 64
+// src/shell.m — VEEX build 65
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
@@ -23,7 +23,7 @@
 #include "lauxlib.h"
 #include "lualib.h"
 
-#define VX_BUILD 64
+#define VX_BUILD 65
 #define VX_STAGE 6
 #define VX_HOOKSET 1
 #define VX_AUTOHOOK 0
@@ -848,7 +848,7 @@ static void vxRunScript(void) {
 static void vxBuildTab(void);
 
 static void addRow(NSString *title, NSString *key, CGFloat y) {
-    VXRow *r = [VXRow buttonWithType:UIButtonTypeCustom];
+    VXRow *r = [[VXRow alloc] initWithFrame:CGRectZero];
     r.frame = CGRectMake(8, y, gContent.bounds.size.width - 16, 32);
     r.layer.cornerRadius = 9;
     r.titleLabel.font = [UIFont systemFontOfSize:13 weight:UIFontWeightSemibold];
@@ -955,7 +955,7 @@ static void buildUI(UIWindowScene *sc) {
     [gPanel addSubview:head];
 
     UILabel *ttl = [[UILabel alloc] initWithFrame:CGRectMake(12, 0, 120, 36)];
-    ttl.text = @"VEEX 64";
+    ttl.text = @"VEEX 65";
     ttl.textColor = UIColor.whiteColor;
     ttl.font = [UIFont monospacedSystemFontOfSize:14 weight:UIFontWeightBold];
     [head addSubview:ttl];
