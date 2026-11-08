@@ -1,4 +1,4 @@
-// src/shell.m — VEEX build 63
+// src/shell.m — VEEX build 64
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
@@ -23,10 +23,10 @@
 #include "lauxlib.h"
 #include "lualib.h"
 
-#define VX_BUILD 63
+#define VX_BUILD 64
 #define VX_STAGE 6
 #define VX_HOOKSET 1
-#define VX_AUTOHOOK 1
+#define VX_AUTOHOOK 0
 #define VX_FPS 20
 
 #define SCRIPT_URL @"https://raw.githubusercontent.com/lyvstoremx/VEEX-IPA/main/scripts/esp.lua"
@@ -189,6 +189,7 @@ static void vxHookName(const char *name, void *rep, void **origOut) {
     void *h = dlopen(NULL, RTLD_NOW);
     void *t = dlsym(h, name);
     if (!t) { vxLog(@"[VEEX] !%@ (sin simbolo)", @(name)); return; }
+    vxWriteSync([NSString stringWithFormat:@"[VEEX] >%@\n", @(name)]);
     int r = vxInlineHook(t, rep, origOut);
     if (r == 0) { gHooked++; vxLog(@"[VEEX] +%@", @(name)); }
     else vxLog(@"[VEEX] !%@ (%d)", @(name), r);
@@ -954,7 +955,7 @@ static void buildUI(UIWindowScene *sc) {
     [gPanel addSubview:head];
 
     UILabel *ttl = [[UILabel alloc] initWithFrame:CGRectMake(12, 0, 120, 36)];
-    ttl.text = @"VEEX 63";
+    ttl.text = @"VEEX 64";
     ttl.textColor = UIColor.whiteColor;
     ttl.font = [UIFont monospacedSystemFontOfSize:14 weight:UIFontWeightBold];
     [head addSubview:ttl];
@@ -1038,7 +1039,7 @@ static void buildUI(UIWindowScene *sc) {
 @implementation VXRoot (Actions)
 - (void)vxDoClose { gOpen = !gOpen; gPanel.hidden = !gOpen; }
 - (void)vxDoTab:(UIButton *)b { gTab = (int)b.tag; vxBuildTab(); }
-- (void)vxDoHook { vxInstallHooks(); vxFindSelf(); vxPatchLoadName(); vxKillAttest(); vxFingerprint(); }
+- (void)vxDoHook { vxInstallBody(); vxInstallHooks(); vxFindSelf(); vxPatchLoadName(); vxKillAttest(); vxFingerprint(); }
 - (void)vxDoRun { vxRunScript(); }
 - (void)vxDoStop { vxStopScript(); vxLog(@"[VEEX] script detenido"); }
 - (void)vxDoCopy { UIPasteboard.generalPasteboard.string = gLog ?: @""; vxLog(@"[VEEX] log copiado"); }
