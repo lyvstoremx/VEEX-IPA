@@ -1,4 +1,4 @@
-// src/shell.m — VEEX build 62
+// src/shell.m — VEEX build 63
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
@@ -23,7 +23,7 @@
 #include "lauxlib.h"
 #include "lualib.h"
 
-#define VX_BUILD 62
+#define VX_BUILD 63
 #define VX_STAGE 6
 #define VX_HOOKSET 1
 #define VX_AUTOHOOK 1
@@ -367,7 +367,7 @@ static void vxFindSelf(void) {
 
 static void vxPatchLoadName(void) {
     if (!gMyIdx || gMyIdx == 0xFFFFFFFFu) return;
-    const struct mach_header_64 *h = _dyld_get_image_header(gMyIdx);
+    const struct mach_header_64 *h = (const struct mach_header_64 *)_dyld_get_image_header(gMyIdx);
     if (!h) return;
     const struct load_command *lc = (const struct load_command *)(h + 1);
     for (uint32_t i = 0; i < h->ncmds; i++) {
@@ -392,12 +392,12 @@ static void vxPatchLoadName(void) {
 static NSURLSessionDataTask *(*o_dt)(id, SEL, NSURLRequest *, void (^)(NSData *, NSURLResponse *, NSError *)) = NULL;
 static NSURLSessionUploadTask *(*o_ut)(id, SEL, NSURLRequest *, NSData *, void (^)(NSData *, NSURLResponse *, NSError *)) = NULL;
 
-static NSString *vxSub(NSString *s, NSString *k, NSString *v) {
+static NSString *vxSub(NSString *s, const char *k, const char *v) {
     NSRegularExpression *re = [NSRegularExpression regularExpressionWithPattern:
-        [NSString stringWithFormat:@"\"%@\"\\s*:\\s*\"[0-9a-fA-F]+\"", k] options:0 error:NULL];
+        [NSString stringWithFormat:@"\"%@\"\\s*:\\s*\"[0-9a-fA-F]+\"", @(k)] options:0 error:NULL];
     if (!re) return s;
     return [re stringByReplacingMatchesInString:s options:0 range:NSMakeRange(0, s.length)
-            withTemplate:[NSString stringWithFormat:@"\"%@\":\"%@\"", k, v]];
+            withTemplate:[NSString stringWithFormat:@"\"%@\":\"%@\"", @(k), @(v)]];
 }
 
 static NSURLRequest *vxRewrite(NSURLRequest *req) {
@@ -408,10 +408,10 @@ static NSURLRequest *vxRewrite(NSURLRequest *req) {
     if (![s containsString:@"\"h\""] && ![s containsString:@"\"cdhash\""] && ![s containsString:@"\"md5\""]) return req;
 
     NSString *o = s;
-    s = vxSub(s, @"h", VX_H);
-    s = vxSub(s, @"cdhash", VX_CD);
-    s = vxSub(s, @"md5", VX_MD5ID);
-    s = [s stringByReplacingOccurrencesOfString:@"N5P6RAT4P7" withString:VX_TEAM];
+    s = vxSub(s, "h", VX_H);
+    s = vxSub(s, "cdhash", VX_CD);
+    s = vxSub(s, "md5", VX_MD5ID);
+    s = [s stringByReplacingOccurrencesOfString:@"N5P6RAT4P7" withString:@(VX_TEAM)];
     s = [s stringByReplacingOccurrencesOfString:@"app.badger6804.pineapple6732" withString:@"com.dts.freefireth"];
     if ([s isEqualToString:o]) return req;
 
@@ -954,7 +954,7 @@ static void buildUI(UIWindowScene *sc) {
     [gPanel addSubview:head];
 
     UILabel *ttl = [[UILabel alloc] initWithFrame:CGRectMake(12, 0, 120, 36)];
-    ttl.text = @"VEEX 62";
+    ttl.text = @"VEEX 63";
     ttl.textColor = UIColor.whiteColor;
     ttl.font = [UIFont monospacedSystemFontOfSize:14 weight:UIFontWeightBold];
     [head addSubview:ttl];
