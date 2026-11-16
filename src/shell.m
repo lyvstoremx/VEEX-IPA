@@ -1,4 +1,4 @@
-// src/shell.m — VEEX build 74
+// src/shell.m — VEEX build 75
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
@@ -25,10 +25,10 @@
 #include "lauxlib.h"
 #include "lualib.h"
 
-#define VX_BUILD 74
+#define VX_BUILD 75
 #define VX_STAGE 0
 #define VX_BOOT 3
-#define VX_HOOKSET 1
+#define VX_HOOKSET 0
 #define VX_AUTOHOOK 0
 #define VX_FPS 20
 
@@ -640,8 +640,14 @@ static void vxStopScript(void);
 - (void)vxDoTab:(UIButton *)b { gTab = (int)b.tag; vxBuildTab(); }
 - (void)vxDoHook {
     vxLog(@"[VEEX] HOOK tap");
-    vxInstallBody(); vxInstallHooks(); vxFindSelf(); vxPatchLoadName();
-    vxPatchCryptid(); vxKillAttest(); vxFingerprint();
+    vxLog(@"[VEEX] H1 body");     vxInstallBody();
+    vxLog(@"[VEEX] H2 hooks");    vxInstallHooks();
+    vxLog(@"[VEEX] H3 self");     vxFindSelf();
+    vxLog(@"[VEEX] H4 loadname"); vxPatchLoadName();
+    vxLog(@"[VEEX] H5 cryptid");  vxPatchCryptid();
+    vxLog(@"[VEEX] H6 attest");   vxKillAttest();
+    vxLog(@"[VEEX] H7 fp");       vxFingerprint();
+    vxLog(@"[VEEX] H8 fin");
 }
 - (void)vxDoRun { vxRunScript(); }
 - (void)vxDoStop { vxStopScript(); vxLog(@"[VEEX] stop"); }
