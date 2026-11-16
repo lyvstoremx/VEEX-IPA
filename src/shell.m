@@ -915,6 +915,15 @@ static int l_str(lua_State *L) {
     return 1;
 }
 
+static int l_w2s(lua_State *L) {
+    uint64_t f = (uint64_t)luaL_checkinteger(L,1);
+    uint64_t o = (uint64_t)luaL_checkinteger(L,2);
+    float x = (float)luaL_checknumber(L,3), y = (float)luaL_checknumber(L,4), z = (float)luaL_checknumber(L,5);
+    vx3f r = ((vx3f (*)(uint64_t, float, float, float))(uintptr_t)f)(o, x, y, z);
+    lua_pushnumber(L, r.x); lua_pushnumber(L, r.y); lua_pushnumber(L, r.z);
+    return 3;
+}
+
 static void vxStopScript(void) { gRun = 0; }
 
 static void vxRegister(lua_State *L) {
@@ -932,6 +941,7 @@ static void vxRegister(lua_State *L) {
     lua_register(L, "arrlen", l_arrlen); lua_register(L, "arrat", l_arrat);
     lua_register(L, "pos3", l_pos3); lua_register(L, "gete", l_gete);
     lua_register(L, "sete", l_sete); lua_register(L, "str", l_str);
+    lua_register(L, "w2s", l_w2s);
 }
 
 static void *vxRunThread(void *arg) {
