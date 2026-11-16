@@ -1,4 +1,4 @@
--- VEEX v66
+-- VEEX v74
 local function on(k) return (cfg(k) or 0) ~= 0 end
 local function P(cls, mth, argc)
   local c = i2c_class(cls)
@@ -9,17 +9,17 @@ local function P(cls, mth, argc)
 end
 
 local camC    = i2c_class("Camera")
-local tp      = i2c_class("Player")
-local fot     = P("GameObject", "FindObjectsOfType", 1)
-local w2s     = camC and i2c_mptr(camC, "WorldToScreenPoint", 1)
-local getmain = camC and i2c_mptr(camC, "get_main", 0)
-local gtr     = P("Component", "get_transform", 0)
-local gpos    = P("Transform", "get_position", 0)
-local gfwd    = P("Transform", "get_forward", 0)
-local geteu   = P("Transform", "get_eulerAngles", 0)
-local seteu   = P("Transform", "set_eulerAngles", 1)
-local gnk     = P("Player", "get_nickname", 0)
-log("v66 fot=" .. tostring(fot) .. " w2s=" .. tostring(w2s) .. " tp=" .. tostring(tp))
+local tpp     = i2c_class("Player")
+local fotp    = P("GameObject", "FindObjectsOfType", 1)
+local w2sp    = camC and i2c_mptr(camC, "WorldToScreenPoint", 1)
+local getmainp = camC and i2c_mptr(camC, "get_main", 0)
+local gtrp    = P("Component", "get_transform", 0)
+local gposp   = P("Transform", "get_position", 0)
+local gfwdp   = P("Transform", "get_forward", 0)
+local geteup  = P("Transform", "get_eulerAngles", 0)
+local seteup  = P("Transform", "set_eulerAngles", 1)
+local gnkp    = P("Player", "get_nickname", 0)
+log("v74 fot=" .. tostring(fotp) .. " w2s=" .. tostring(w2sp) .. " tp=" .. tostring(tpp))
 
 local PAL = {
   {1, 0.22, 0.22}, {0.25, 1, 0.35}, {0.25, 0.72, 1}, {1, 1, 0.25},
@@ -32,8 +32,8 @@ local lastScan = 0
 local SCAN_MS = 500
 
 local function pickCam()
-  if not getmain then return nil end
-  local c = call(getmain, 0)
+  if not getmainp then return nil end
+  local c = call(getmainp, 0)
   if c and c ~= 0 then cam = c end
   return cam
 end
@@ -41,13 +41,13 @@ end
 local function update()
   if not cam then pickCam() end
   if not cam then return end
-  local ct = call(gtr, cam)
+  local ct = call(gtrp, cam)
   if not ct or ct == 0 then cam = nil return end
-  cx, cy, cz = pos3(gpos, ct)
+  cx, cy, cz = pos3(gposp, ct)
   local fx, fy, fz = 0, 0, 0
-  if gfwd then fx, fy, fz = pos3(gfwd, ct) end
+  if gfwdp then fx, fy, fz = pos3(gfwdp, ct) end
 
-  local arr = callv(fot, 0, tp)
+  local arr = callv(fotp, 0, tpp)
   if not arr or arr == 0 then return end
   local n = arrlen(arr)
   if n > 60 then n = 60 end
@@ -56,9 +56,9 @@ local function update()
   for i = 0, n - 1 do
     local e = arrat(arr, i)
     if e and e ~= 0 then
-      local tr = call(gtr, e)
+      local tr = call(gtrp, e)
       if tr and tr ~= 0 then
-        local x, y, z = pos3(gpos, tr)
+        local x, y, z = pos3(gposp, tr)
         if x and x ~= 0 then
           local dx, dy, dz = x - cx, y - cy, z - cz
           local dep = dx * fx + dy * fy + dz * fz
@@ -79,14 +79,14 @@ local function update()
   for _, o in ipairs(list) do
     if o.e ~= lp then
       local hy = o.y + 1.42
-      local sx, sy, dep = w2s(cam, o.x, hy, o.z)
-      local _, fy2 = w2s(cam, o.x, o.y, o.z)
+      local sx, sy, dep = w2s(w2sp, cam, o.x, hy, o.z)
+      local _, fy2 = w2s(w2sp, cam, o.x, o.y, o.z)
       if sx and sx > 0 and sx < W and sy and sy > 0 and fy2 and fy2 > sy then
         local h = fy2 - sy
         if h > 4 and dep and dep > 0 then
           local nm = nil
-          if gnk and dep < 90 then
-            local np = call(gnk, o.e)
+          if gnkp and dep < 90 then
+            local np = call(gnkp, o.e)
             if np and np ~= 0 then nm = str(np) end
           end
           out[#out + 1] = { x = sx, y = sy, h = h, d = dep, nm = nm, tx = o.x, ty = hy, tz = o.z }
@@ -100,8 +100,8 @@ local function update()
 end
 
 local function aim()
-  if not on("aim.on") or not seteu or #boxes == 0 or not cam then return end
-  local ct = call(gtr, cam)
+  if not on("aim.on") or not seteup or #boxes == 0 or not cam then return end
+  local ct = call(gtrp, cam)
   if not ct or ct == 0 then return end
   local W, H = sw(), sh()
   local fov = on("aim.awm") and 0.42 or 0.16
@@ -117,13 +117,13 @@ local function aim()
   local yaw = math.deg(math.atan2(dx, dz))
   local pitch = -math.deg(math.atan2(dy, hd))
   if on("aim.human") and not on("aim.awm") then
-    local ex, ey = gete(geteu, ct)
+    local ex, ey = gete(geteup, ct)
     if ex then
       pitch = ex + (pitch - ex) * 0.55
       yaw = ey + (yaw - ey) * 0.55
     end
   end
-  sete(seteu, ct, pitch, yaw, 0)
+  sete(seteup, ct, pitch, yaw, 0)
 end
 
 local function debugTab()
