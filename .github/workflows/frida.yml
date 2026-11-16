@@ -13,7 +13,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: deps
-        run: brew install ldid xz
+        run: brew install xz
 
       - name: wrap
         run: |
@@ -34,10 +34,11 @@ jobs:
           lipo "$BIN" -thin arm64 -output Payload/frida-server.app/frida-server
           chmod +x Payload/frida-server.app/frida-server
           file Payload/frida-server.app/frida-server
+          codesign --remove-signature Payload/frida-server.app/frida-server || true
           cp frida/Info.plist Payload/frida-server.app/Info.plist
-          ldid -S frida/entitlements.plist Payload/frida-server.app/frida-server
+          codesign --force --sign - --entitlements frida/entitlements.plist Payload/frida-server.app/frida-server
           echo "--- entitlements inyectados ---"
-          ldid -e Payload/frida-server.app/frida-server
+          codesign -d --entitlements :- Payload/frida-server.app/frida-server
           zip -r frida-server.tipa Payload
           ls -la frida-server.tipa
 
