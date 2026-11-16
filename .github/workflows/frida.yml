@@ -21,8 +21,11 @@ jobs:
           V=17.26.3
           curl -fL -o g.xz "https://github.com/frida/frida/releases/download/$V/frida-gadget-${V}-ios-universal.dylib.xz"
           unxz g.xz
-          cp g FridaGadget.dylib
+          lipo g -thin arm64 -output FridaGadget.dylib
           file FridaGadget.dylib
+          codesign --remove-signature FridaGadget.dylib || true
+          codesign --force --sign - FridaGadget.dylib
+          codesign -dv FridaGadget.dylib 2>&1 | head -5
           cat > FridaGadget.config.json <<'EOF'
           {
             "interaction": {
@@ -42,6 +45,6 @@ jobs:
           tag_name: gadget-${{ github.run_number }}
           name: frida-gadget ${{ github.run_number }}
           body: |
-            frida-gadget 17.26.3 para TrollFools.
+            frida-gadget 17.26.3 firmado, para TrollFools.
             https://github.com/lyvstoremx/VEEX-IPA/releases/download/gadget-${{ github.run_number }}/FridaGadget.zip
           files: FridaGadget.zip
