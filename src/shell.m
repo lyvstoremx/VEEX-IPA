@@ -1,4 +1,4 @@
-// src/shell.m — VEEX build 73
+// src/shell.m — VEEX build 74
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
@@ -17,6 +17,7 @@
 #import <string.h>
 #import <time.h>
 #import <unistd.h>
+#import <pthread.h>
 #import <sys/mman.h>
 #import <sys/types.h>
 #import <sys/sysctl.h>
@@ -24,7 +25,7 @@
 #include "lauxlib.h"
 #include "lualib.h"
 
-#define VX_BUILD 73
+#define VX_BUILD 74
 #define VX_STAGE 0
 #define VX_BOOT 3
 #define VX_HOOKSET 1
@@ -97,6 +98,7 @@ static void vxWriteSync(NSString *s) {
     if (!f) { [s writeToFile:p atomically:YES encoding:NSUTF8StringEncoding error:nil]; return; }
     [f seekToEndOfFile];
     [f writeData:[s dataUsingEncoding:NSUTF8StringEncoding]];
+    [f synchronizeFile];
     [f closeFile];
 }
 
@@ -110,7 +112,7 @@ static void vxLog(NSString *fmt, ...) {
     [gLog appendString:@"\n"];
     if (gLog.length > 20000) [gLog deleteCharactersInRange:NSMakeRange(0, gLog.length - 16000)];
     NSString *line = [s stringByAppendingString:@"\n"];
-    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{ vxWriteSync(line); });
+    vxWriteSync(line);
     dispatch_async(dispatch_get_main_queue(), ^{
         if (gLogView) {
             gLogView.text = gLog;
@@ -636,10 +638,23 @@ static void vxStopScript(void);
 }
 - (void)vxDoClose { gOpen = !gOpen; gPanel.hidden = !gOpen; }
 - (void)vxDoTab:(UIButton *)b { gTab = (int)b.tag; vxBuildTab(); }
-- (void)vxDoHook { vxInstallBody(); vxInstallHooks(); vxFindSelf(); vxPatchLoadName(); vxPatchCryptid(); vxKillAttest(); vxFingerprint(); }
+- (void)vxDoHook {
+    vxLog(@"[VEEX] HOOK tap");
+    vxInstallBody(); vxInstallHooks(); vxFindSelf(); vxPatchLoadName();
+    vxPatchCryptid(); vxKillAttest(); vxFingerprint();
+}
 - (void)vxDoRun { vxRunScript(); }
 - (void)vxDoStop { vxStopScript(); vxLog(@"[VEEX] stop"); }
 - (void)vxDoCopy { UIPasteboard.generalPasteboard.string = gLog ?: @""; vxLog(@"[VEEX] log copiado"); }
+@end
+
+@interface VXWindow : UIWindow @end
+@implementation VXWindow
+- (UIView *)hitTest:(CGPoint)p withEvent:(UIEvent *)e {
+    UIView *v = [super hitTest:p withEvent:e];
+    if (!v || v == self || v == self.rootViewController.view) return nil;
+    return v;
+}
 @end
 
 @interface VXRow : UIButton
@@ -902,58 +917,100 @@ static int l_str(lua_State *L) {
 
 static void vxStopScript(void) { gRun = 0; }
 
-static void vxRunScript(void) {
-    gRun = 0;
-    usleep(150000);
-    if (gL) { lua_close(gL); gL = NULL; }
-    if (!gI2C) { vxLog(@"[VEEX] sin il2cpp"); return; }
-    if (p_att && p_dom) { p_att(p_dom()); vxLog(@"[VEEX] attach en run"); }
+static void vxRegister(lua_State *L) {
+    lua_register(L, "log", l_log); lua_register(L, "text", l_text);
+    lua_register(L, "rect", l_rect); lua_register(L, "line", l_line); lua_register(L, "clear", l_clear);
+    lua_register(L, "sw", l_sw); lua_register(L, "sh", l_sh);
+    lua_register(L, "r32", l_r32); lua_register(L, "w32", l_w32);
+    lua_register(L, "rf", l_rf); lua_register(L, "wf", l_wf);
+    lua_register(L, "cfg", l_cfg); lua_register(L, "setcfg", l_setcfg);
+    lua_register(L, "i2c_ready", l_i2c_ready); lua_register(L, "i2c_class", l_i2c_class);
+    lua_register(L, "i2c_mptr", l_i2c_mptr); lua_register(L, "kl", l_kl);
+    lua_register(L, "dump", l_dump); lua_register(L, "meths", l_meths);
+    lua_register(L, "dumpall", l_dumpall); lua_register(L, "meta", l_meta);
+    lua_register(L, "call", l_call); lua_register(L, "callv", l_callv);
+    lua_register(L, "arrlen", l_arrlen); lua_register(L, "arrat", l_arrat);
+    lua_register(L, "pos3", l_pos3); lua_register(L, "gete", l_gete);
+    lua_register(L, "sete", l_sete); lua_register(L, "str", l_str);
+}
+
+static void *vxRunThread(void *arg) {
+    (void)arg;
+    vxLog(@"[VEEX] R1 hilo vivo");
+    [NSThread sleepForTimeInterval:1.2];
+    vxLog(@"[VEEX] R2 esperando il2cpp");
+    for (int i = 0; i < 40 && !gI2C; i++) { vxLoadIL2CPP(); if (!gI2C) [NSThread sleepForTimeInterval:0.2]; }
+    if (!gI2C) { vxLog(@"[VEEX] R3 ABORTO sin il2cpp"); return NULL; }
+    if (!p_dom || !p_att) { vxLog(@"[VEEX] R4 ABORTO punteros NULL"); return NULL; }
+
+    void *dom = NULL;
+    for (int i = 0; i < 40; i++) {
+        vxLog(@"[VEEX] R5 dom intento %d", i);
+        dom = p_dom();
+        if (dom) break;
+        [NSThread sleepForTimeInterval:0.2];
+    }
+    if (!dom) { vxLog(@"[VEEX] R6 ABORTO dom NULL"); return NULL; }
+    vxLog(@"[VEEX] R7 dom=%p", dom);
+
+    vxLog(@"[VEEX] R8 attach...");
+    void *th = p_att(dom);
+    vxLog(@"[VEEX] R9 attach OK th=%p", th);
+
+    vxLog(@"[VEEX] RA assemblies...");
+    size_t n = 0;
+    void **asms = (void **)p_asms(dom, &n);
+    vxLog(@"[VEEX] RB assemblies=%zu asms=%p", n, asms);
+    if (!n) { vxLog(@"[VEEX] RC ABORTO sin assemblies"); return NULL; }
 
     NSString *path = [gDocs stringByAppendingPathComponent:@"esp.lua"];
     NSData *d = [NSData dataWithContentsOfURL:
         [NSURL URLWithString:[SCRIPT_URL stringByAppendingFormat:@"?t=%d", (int)time(NULL)]]];
     if (d.length > 100) [d writeToFile:path atomically:YES];
     else vxLog(@"[VEEX] sin red, uso copia local");
-    if (![[NSFileManager defaultManager] fileExistsAtPath:path]) { vxLog(@"[VEEX] falta esp.lua"); return; }
+    if (![[NSFileManager defaultManager] fileExistsAtPath:path]) { vxLog(@"[VEEX] RD falta esp.lua"); return NULL; }
 
+    vxLog(@"[VEEX] RD lua state");
     gL = luaL_newstate();
+    if (!gL) { vxLog(@"[VEEX] RE ABORTO sin estado"); return NULL; }
     luaL_openlibs(gL);
-    lua_register(gL, "log", l_log); lua_register(gL, "text", l_text);
-    lua_register(gL, "rect", l_rect); lua_register(gL, "line", l_line); lua_register(gL, "clear", l_clear);
-    lua_register(gL, "sw", l_sw); lua_register(gL, "sh", l_sh);
-    lua_register(gL, "r32", l_r32); lua_register(gL, "w32", l_w32);
-    lua_register(gL, "rf", l_rf); lua_register(gL, "wf", l_wf);
-    lua_register(gL, "cfg", l_cfg); lua_register(gL, "setcfg", l_setcfg);
-    lua_register(gL, "i2c_ready", l_i2c_ready); lua_register(gL, "i2c_class", l_i2c_class);
-    lua_register(gL, "i2c_mptr", l_i2c_mptr); lua_register(gL, "kl", l_kl);
-    lua_register(gL, "dump", l_dump); lua_register(gL, "meths", l_meths);
-    lua_register(gL, "dumpall", l_dumpall); lua_register(gL, "meta", l_meta);
-    lua_register(gL, "call", l_call); lua_register(gL, "callv", l_callv);
-    lua_register(gL, "arrlen", l_arrlen); lua_register(gL, "arrat", l_arrat);
-    lua_register(gL, "pos3", l_pos3); lua_register(gL, "gete", l_gete);
-    lua_register(gL, "sete", l_sete); lua_register(gL, "str", l_str);
+    vxRegister(gL);
     lua_pushinteger(gL, (lua_Integer)gBase); lua_setglobal(gL, "BASE");
     lua_pushinteger(gL, (lua_Integer)gSize); lua_setglobal(gL, "SIZE");
     lua_pushstring(gL, gDocs.UTF8String); lua_setglobal(gL, "DOC");
 
     if (luaL_dofile(gL, path.UTF8String) != LUA_OK) {
-        vxLog(@"[VEEX] LUA ERROR: %s", lua_tostring(gL, -1));
-        return;
+        vxLog(@"[VEEX] RE LUA ERROR: %s", lua_tostring(gL, -1));
+        return NULL;
     }
-    vxLog(@"[VEEX] script cargado");
+    vxLog(@"[VEEX] RF script cargado");
     gRun = 1;
 
     lua_State *L = gL;
-    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-        while (gRun && gL == L) {
-            lua_getglobal(L, "tick");
-            if (lua_isfunction(L, -1)) {
-                if (lua_pcall(L, 0, 0, 0) != LUA_OK) { vxLog(@"[VEEX] LUA tick: %s", lua_tostring(L, -1)); lua_pop(L, 1); }
-            } else lua_pop(L, 1);
-            dispatch_async(dispatch_get_main_queue(), ^{ if (gDraw) [gDraw setNeedsDisplay]; });
-            [NSThread sleepForTimeInterval:1.0 / VX_FPS];
-        }
-    });
+    while (gRun && gL == L) {
+        lua_getglobal(L, "tick");
+        if (lua_isfunction(L, -1)) {
+            if (lua_pcall(L, 0, 0, 0) != LUA_OK) { vxLog(@"[VEEX] LUA tick: %s", lua_tostring(L, -1)); lua_pop(L, 1); }
+        } else lua_pop(L, 1);
+        dispatch_async(dispatch_get_main_queue(), ^{ if (gDraw) [gDraw setNeedsDisplay]; });
+        [NSThread sleepForTimeInterval:1.0 / VX_FPS];
+    }
+    vxLog(@"[VEEX] tick salio");
+    return NULL;
+}
+
+static void vxRunScript(void) {
+    gRun = 0;
+    if (gL) { lua_close(gL); gL = NULL; }
+    vxLog(@"[VEEX] RUN tap");
+    pthread_t t;
+    pthread_attr_t at;
+    pthread_attr_init(&at);
+    pthread_attr_setdetachstate(&at, PTHREAD_CREATE_DETACHED);
+    pthread_attr_setstacksize(&at, 1024 * 1024);
+    pthread_create(&t, &at, vxRunThread, NULL);
+    pthread_attr_destroy(&at);
+    vxLog(@"[VEEX] RUN hilo lanzado");
 }
 
 static void addRow(NSString *title, NSString *key, CGFloat y) {
@@ -1032,7 +1089,7 @@ static void buildUI(UIWindowScene *sc) {
     gCfg[@"draw.line"] = @NO; gCfg[@"draw.hp"] = @NO; gCfg[@"draw.wpn"] = @NO; gCfg[@"draw.skel"] = @NO;
     gCfg[@"misc.fps"] = @NO; gCfg[@"misc.hide"] = @NO; gCfg[@"misc.anti"] = @NO;
 
-    gWin = [[UIWindow alloc] initWithWindowScene:sc];
+    gWin = [[VXWindow alloc] initWithWindowScene:sc];
     gWin.frame = sc.coordinateSpace.bounds;
     gWin.windowLevel = UIWindowLevelAlert + 1;
     gWin.backgroundColor = UIColor.clearColor;
