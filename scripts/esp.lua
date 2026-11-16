@@ -1,4 +1,4 @@
--- VEEX v74
+-- VEEX v77
 local function on(k) return (cfg(k) or 0) ~= 0 end
 local function P(cls, mth, argc)
   local c = i2c_class(cls)
@@ -19,13 +19,16 @@ local gfwdp   = P("Transform", "get_forward", 0)
 local geteup  = P("Transform", "get_eulerAngles", 0)
 local seteup  = P("Transform", "set_eulerAngles", 1)
 local gnkp    = P("Player", "get_nickname", 0)
-log("v74 fot=" .. tostring(fotp) .. " w2s=" .. tostring(w2sp) .. " tp=" .. tostring(tpp))
+log("v77 fot=" .. tostring(fotp) .. " w2s=" .. tostring(w2sp) .. " tp=" .. tostring(tpp)
+    .. " gm=" .. tostring(getmainp) .. " gtr=" .. tostring(gtrp)
+    .. " gpos=" .. tostring(gposp) .. " fwd=" .. tostring(gfwdp) .. " camC=" .. tostring(camC))
 
 local PAL = {
   {1, 0.22, 0.22}, {0.25, 1, 0.35}, {0.25, 0.72, 1}, {1, 1, 0.25},
   {1, 0.32, 1}, {1, 0.62, 0.15}, {1, 1, 1}
 }
 local ci, cam, frames, dlog = 1, nil, 0, 0
+local camNul, hb = 0, 0
 local boxes = {}
 local cx, cy, cz = 0, 0, 0
 local lastScan = 0
@@ -40,7 +43,11 @@ end
 
 local function update()
   if not cam then pickCam() end
-  if not cam then return end
+  if not cam then
+    camNul = camNul + 1
+    if camNul <= 3 then log("sin camara (intento " .. camNul .. ")") end
+    return
+  end
   local ct = call(gtrp, cam)
   if not ct or ct == 0 then cam = nil return end
   cx, cy, cz = pos3(gposp, ct)
@@ -48,12 +55,15 @@ local function update()
   if gfwdp then fx, fy, fz = pos3(gfwdp, ct) end
 
   local arr = callv(fotp, 0, tpp)
-  if not arr or arr == 0 then return end
+  if not arr or arr == 0 then
+    if dlog < 3 then dlog = dlog + 1 log("fot devuelve 0") end
+    return
+  end
   local n = arrlen(arr)
-  if n > 60 then n = 60 end
+  log("scan n=" .. n)
 
   local list, bp, lp = {}, 99, nil
-  for i = 0, n - 1 do
+  for i = 0, math.min(n, 60) - 1 do
     local e = arrat(arr, i)
     if e and e ~= 0 then
       local tr = call(gtrp, e)
@@ -72,7 +82,7 @@ local function update()
       end
     end
   end
-  if dlog == 0 then dlog = 1 log("U n=" .. #list .. " perp=" .. string.format("%.2f", bp)) end
+  log("filtrados=" .. #list)
 
   local W, H = sw(), sh()
   local out = {}
@@ -97,6 +107,7 @@ local function update()
   table.sort(out, function(a, b) return a.d < b.d end)
   boxes = out
   frames = frames + 1
+  log("proyectados=" .. #boxes)
 end
 
 local function aim()
@@ -104,7 +115,7 @@ local function aim()
   local ct = call(gtrp, cam)
   if not ct or ct == 0 then return end
   local W, H = sw(), sh()
-  local fov = on("aim.awm") and 0.42 or 0.16
+  local fov = on("aim.awm") and 0.18 or 0.06
   local best, bd = nil, 1e9
   for _, b in ipairs(boxes) do
     local dx, dy = b.x - W / 2, b.y + b.h * 0.18 - H / 2
@@ -119,29 +130,31 @@ local function aim()
   if on("aim.human") and not on("aim.awm") then
     local ex, ey = gete(geteup, ct)
     if ex then
-      pitch = ex + (pitch - ex) * 0.55
-      yaw = ey + (yaw - ey) * 0.55
+      pitch = ex + (pitch - ex) * 0.22
+      yaw = ey + (yaw - ey) * 0.22
     end
   end
   sete(seteup, ct, pitch, yaw, 0)
 end
 
 local function debugTab()
+  if on("set.reset") then setcfg("set.reset", 0) reset() end
+  if on("set.reload") then setcfg("set.reload", 0) reload() end
   if on("dbg.all") then setcfg("dbg.all", 0) dumpall() end
   if on("dbg.meta") then setcfg("dbg.meta", 0) meta() end
   if on("dbg.player") then
     setcfg("dbg.player", 0)
-    for _, c in ipairs(dump("Player", 80)) do log(c.s .. "::" .. c.n) end
+    for _, c in ipairs(dump("Player", 80)) do log("CLS " .. c.s .. "::" .. c.n) end
     log("-- fin player --")
   end
   if on("dbg.avatar") then
     setcfg("dbg.avatar", 0)
-    for _, c in ipairs(dump("Avatar", 80)) do log(c.s .. "::" .. c.n) end
+    for _, c in ipairs(dump("Avatar", 80)) do log("CLS " .. c.s .. "::" .. c.n) end
     log("-- fin avatar --")
   end
   if on("dbg.camera") then
     setcfg("dbg.camera", 0)
-    for _, c in ipairs(dump("Camera", 80)) do log(c.s .. "::" .. c.n) end
+    for _, c in ipairs(dump("Camera", 80)) do log("CLS " .. c.s .. "::" .. c.n) end
     log("-- fin camera --")
   end
 end
@@ -149,6 +162,12 @@ end
 function tick()
   clear()
   debugTab()
+
+  hb = hb + 1
+  if hb % 20 == 0 then
+    log("hb esp=" .. tostring(cfg("esp.on")) .. " cam=" .. tostring(cam) .. " n=" .. #boxes)
+  end
+
   if not on("esp.on") and not on("aim.on") then return end
 
   local now = math.floor(os.clock() * 1000)
