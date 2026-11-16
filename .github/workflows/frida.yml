@@ -28,14 +28,12 @@ jobs:
             *.lzma) unlzma "$D"; D="${D%.lzma}" ;;
           esac
           tar xf "$D"
-          echo "--- contenido ---"
-          find . -name 'frida*' -type f
           BIN=$(find . -name 'frida-server' -type f | head -1)
           echo "binario: $BIN"
-          file "$BIN"
           mkdir -p Payload/frida-server.app
-          cp "$BIN" Payload/frida-server.app/frida-server
+          lipo "$BIN" -thin arm64 -output Payload/frida-server.app/frida-server
           chmod +x Payload/frida-server.app/frida-server
+          file Payload/frida-server.app/frida-server
           cp frida/Info.plist Payload/frida-server.app/Info.plist
           ldid -S frida/entitlements.plist Payload/frida-server.app/frida-server
           echo "--- entitlements inyectados ---"
