@@ -1,4 +1,4 @@
-// src/shell.m — VEEX build 72
+// src/shell.m — VEEX build 73
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
@@ -24,7 +24,7 @@
 #include "lauxlib.h"
 #include "lualib.h"
 
-#define VX_BUILD 72
+#define VX_BUILD 73
 #define VX_STAGE 0
 #define VX_BOOT 3
 #define VX_HOOKSET 1
@@ -566,8 +566,8 @@ static void vxLoadIL2CPP(void) {
     R("il2cpp_class_get_method_from_name", p_mf);
     R("il2cpp_object_get_class", p_kl);
 #undef R
-    gI2C = p_dom && p_att && p_asms && p_img && p_cc && p_ci && p_cn && p_mf && p_kl;
-    if (gI2C) { p_att(p_dom()); vxLog(@"[VEEX] il2cpp OK (attach)"); }
+    gI2C = p_dom && p_asms && p_img && p_cc && p_ci && p_cn && p_mf && p_kl;
+    if (gI2C) vxLog(@"[VEEX] il2cpp OK (resuelto)");
     else vxLog(@"[VEEX] il2cpp FALLO");
 }
 
@@ -907,6 +907,7 @@ static void vxRunScript(void) {
     usleep(150000);
     if (gL) { lua_close(gL); gL = NULL; }
     if (!gI2C) { vxLog(@"[VEEX] sin il2cpp"); return; }
+    if (p_att && p_dom) { p_att(p_dom()); vxLog(@"[VEEX] attach en run"); }
 
     NSString *path = [gDocs stringByAppendingPathComponent:@"esp.lua"];
     NSData *d = [NSData dataWithContentsOfURL:
