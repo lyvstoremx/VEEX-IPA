@@ -1,4 +1,4 @@
-// src/shell.m — VEEX build 67
+// src/shell.m — VEEX build 68
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
@@ -24,7 +24,7 @@
 #include "lauxlib.h"
 #include "lualib.h"
 
-#define VX_BUILD 67
+#define VX_BUILD 68
 #define VX_STAGE 0
 #define VX_BOOT 0
 #define VX_HOOKSET 1
@@ -74,6 +74,17 @@ static volatile int gHitMd5 = 0, gHitSha1 = 0, gHitSha256 = 0, gForced = 0;
 static volatile int gBodies = 0;
 static int gInstalled = 0;
 
+static void vxRaw(const char *fmt, ...) {
+    FILE *f = fopen("/tmp/vx.log", "a");
+    if (!f) return;
+    va_list ap; va_start(ap, fmt);
+    vfprintf(f, fmt, ap);
+    va_end(ap);
+    fputc('\n', f);
+    fflush(f);
+    fclose(f);
+}
+
 static int vxInText(const void *p) {
     uint64_t a = (uint64_t)p;
     return (gTextLo && a >= gTextLo && a < gTextHi) ? 1 : 0;
@@ -93,6 +104,7 @@ static void vxLog(NSString *fmt, ...) {
     va_list ap; va_start(ap, fmt);
     NSString *s = [[NSString alloc] initWithFormat:fmt arguments:ap];
     va_end(ap);
+    vxRaw("%s", s.UTF8String);
     if (!gLog) gLog = [NSMutableString new];
     [gLog appendString:s];
     [gLog appendString:@"\n"];
@@ -349,7 +361,7 @@ static void vxInstallHooks(void) {
 #endif
 #if VX_HOOKSET >= 4
     vxHookName("csops",        (void *)h_csops,        (void **)&o_csops);
-    vxHookName("sysctlbyname", (void *)h_sysctlbyname, (void **)&o_sysctlbyname);
+    vxHookName("sysctlbyname", (void *)h_sysctctlbyname, (void **)&o_sysctlbyname);
     vxHookName("sysctl",       (void *)h_sysctl,       (void **)&o_sysctl);
 #endif
     if (!gMainHdr) gMainHdr = (uint64_t)_dyld_get_image_header(0);
@@ -578,12 +590,36 @@ static void vxUnlock(void) { __atomic_clear((volatile void *)&gDrawLock, __ATOMI
 }
 @end
 
-@interface VXRoot : UIView @end
+static void vxBuildTab(void);
+static void vxInstallBody(void);
+static void vxInstallHooks(void);
+static void vxFindSelf(void);
+static void vxPatchLoadName(void);
+static void vxKillAttest(void);
+static void vxFingerprint(void);
+static void vxRunScript(void);
+static void vxStopScript(void);
+
+@interface VXRoot : UIView
+- (void)vxDoClose;
+- (void)vxDoTab:(UIButton *)b;
+- (void)vxDoHook;
+- (void)vxDoRun;
+- (void)vxDoStop;
+- (void)vxDoCopy;
+@end
+
 @implementation VXRoot
 - (UIView *)hitTest:(CGPoint)p withEvent:(UIEvent *)e {
     UIView *v = [super hitTest:p withEvent:e];
     return v == self ? nil : v;
 }
+- (void)vxDoClose { gOpen = !gOpen; gPanel.hidden = !gOpen; }
+- (void)vxDoTab:(UIButton *)b { gTab = (int)b.tag; vxBuildTab(); }
+- (void)vxDoHook { vxInstallBody(); vxInstallHooks(); vxFindSelf(); vxPatchLoadName(); vxKillAttest(); vxFingerprint(); }
+- (void)vxDoRun { vxRunScript(); }
+- (void)vxDoStop { vxStopScript(); vxLog(@"[VEEX] stop"); }
+- (void)vxDoCopy { UIPasteboard.generalPasteboard.string = gLog ?: @""; vxLog(@"[VEEX] log copiado"); }
 @end
 
 @interface VXRow : UIButton
@@ -899,8 +935,6 @@ static void vxRunScript(void) {
     });
 }
 
-static void vxBuildTab(void);
-
 static void addRow(NSString *title, NSString *key, CGFloat y) {
     VXRow *r = [[VXRow alloc] initWithFrame:CGRectZero];
     r.frame = CGRectMake(8, y, gContent.bounds.size.width - 16, 32);
@@ -967,11 +1001,6 @@ static void vxResetGuest(void) {
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)),
                    dispatch_get_main_queue(), ^{ exit(0); });
 }
-
-@interface VXRoot (Actions)
-- (void)vxDoClose; - (void)vxDoTab:(UIButton *)b; - (void)vxDoHook;
-- (void)vxDoRun; - (void)vxDoStop; - (void)vxDoCopy;
-@end
 
 static void buildUI(UIWindowScene *sc) {
     gCfg = [NSMutableDictionary dictionary];
@@ -1092,15 +1121,6 @@ static void buildUI(UIWindowScene *sc) {
     gLogView.text = gLog ?: @"";
 }
 
-@implementation VXRoot (Actions)
-- (void)vxDoClose { gOpen = !gOpen; gPanel.hidden = !gOpen; }
-- (void)vxDoTab:(UIButton *)b { gTab = (int)b.tag; vxBuildTab(); }
-- (void)vxDoHook { vxInstallBody(); vxInstallHooks(); vxFindSelf(); vxPatchLoadName(); vxKillAttest(); vxFingerprint(); }
-- (void)vxDoRun { vxRunScript(); }
-- (void)vxDoStop { vxStopScript(); vxLog(@"[VEEX] stop"); }
-- (void)vxDoCopy { UIPasteboard.generalPasteboard.string = gLog ?: @""; vxLog(@"[VEEX] log copiado"); }
-@end
-
 static void boot(double delay) {
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay * NSEC_PER_SEC)),
                    dispatch_get_main_queue(), ^{
@@ -1112,10 +1132,31 @@ static void boot(double delay) {
     });
 }
 
+static void vxProbeSelf(void) {
+    Dl_info di;
+    if (!dladdr((void *)vxProbeSelf, &di) || !di.dli_fname) { vxRaw("probe: sin dladdr"); return; }
+    vxRaw("probe: imagen=%s", di.dli_fname);
+    unsigned int n = 0;
+    const char **names = objc_copyClassNamesForImage(di.dli_fname, &n);
+    vxRaw("probe: %u clases", n);
+    for (unsigned int i = 0; i < n; i++) {
+        vxRaw("  cls %s", names[i]);
+        Class c = objc_getClass(names[i]);
+        unsigned int mc = 0;
+        Method *ms = class_copyMethodList(c, &mc);
+        vxRaw("    metodos=%u", mc);
+        if (ms) free(ms);
+    }
+    if (names) free(names);
+    vxRaw("probe: fin");
+}
+
 __attribute__((constructor)) static void vxInit(void) {
+    vxRaw("=== build %d: constructor entra ===", VX_BUILD);
     if (!gLog) gLog = [NSMutableString new];
     gDocs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
     vxLog(@"[VEEX] build %d boot=%d stage=%d", VX_BUILD, VX_BOOT, VX_STAGE);
+    vxRaw("=== constructor: docs=%@ ===", gDocs ?: @"nil");
     gMainHdr = (uint64_t)_dyld_get_image_header(0);
 #if VX_BOOT >= 1
     if (gMainHdr) {
@@ -1138,5 +1179,6 @@ __attribute__((constructor)) static void vxInit(void) {
     });
 #else
     vxLog(@"[VEEX] solo constructor");
+    vxProbeSelf();
 #endif
 }
