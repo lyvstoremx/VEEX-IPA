@@ -1,4 +1,4 @@
-// src/shell.m — VEEX build 69
+// src/shell.m — VEEX build 71
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
@@ -24,9 +24,9 @@
 #include "lauxlib.h"
 #include "lualib.h"
 
-#define VX_BUILD 69
+#define VX_BUILD 71
 #define VX_STAGE 0
-#define VX_BOOT 1
+#define VX_BOOT 3
 #define VX_HOOKSET 1
 #define VX_AUTOHOOK 0
 #define VX_FPS 20
