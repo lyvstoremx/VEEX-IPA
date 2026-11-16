@@ -1,4 +1,4 @@
--- VEEX v65
+-- VEEX v66
 local function on(k) return (cfg(k) or 0) ~= 0 end
 local function P(cls, mth, argc)
   local c = i2c_class(cls)
@@ -19,7 +19,7 @@ local gfwd    = P("Transform", "get_forward", 0)
 local geteu   = P("Transform", "get_eulerAngles", 0)
 local seteu   = P("Transform", "set_eulerAngles", 1)
 local gnk     = P("Player", "get_nickname", 0)
-log("v65 fot=" .. tostring(fot) .. " w2s=" .. tostring(w2s) .. " tp=" .. tostring(tp))
+log("v66 fot=" .. tostring(fot) .. " w2s=" .. tostring(w2s) .. " tp=" .. tostring(tp))
 
 local PAL = {
   {1, 0.22, 0.22}, {0.25, 1, 0.35}, {0.25, 0.72, 1}, {1, 1, 0.25},
@@ -28,6 +28,8 @@ local PAL = {
 local ci, cam, frames, dlog = 1, nil, 0, 0
 local boxes = {}
 local cx, cy, cz = 0, 0, 0
+local lastScan = 0
+local SCAN_MS = 500
 
 local function pickCam()
   if not getmain then return nil end
@@ -124,10 +126,37 @@ local function aim()
   sete(seteu, ct, pitch, yaw, 0)
 end
 
+local function debugTab()
+  if on("dbg.all") then setcfg("dbg.all", 0) dumpall() end
+  if on("dbg.meta") then setcfg("dbg.meta", 0) meta() end
+  if on("dbg.player") then
+    setcfg("dbg.player", 0)
+    for _, c in ipairs(dump("Player", 80)) do log(c.s .. "::" .. c.n) end
+    log("-- fin player --")
+  end
+  if on("dbg.avatar") then
+    setcfg("dbg.avatar", 0)
+    for _, c in ipairs(dump("Avatar", 80)) do log(c.s .. "::" .. c.n) end
+    log("-- fin avatar --")
+  end
+  if on("dbg.camera") then
+    setcfg("dbg.camera", 0)
+    for _, c in ipairs(dump("Camera", 80)) do log(c.s .. "::" .. c.n) end
+    log("-- fin camera --")
+  end
+end
+
 function tick()
   clear()
+  debugTab()
   if not on("esp.on") and not on("aim.on") then return end
-  if frames % 2 == 0 then update() end
+
+  local now = math.floor(os.clock() * 1000)
+  if now - lastScan >= SCAN_MS then
+    lastScan = now
+    update()
+  end
+
   if on("esp.color") then ci = (math.floor(os.clock() * 0.7) % #PAL) + 1 end
   local c = PAL[ci]
   if on("esp.on") then
