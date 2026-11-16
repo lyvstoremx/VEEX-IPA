@@ -29,9 +29,12 @@ jobs:
           esac
           tar xf "$D"
           BIN=$(find . -name 'frida-server' -type f | head -1)
-          echo "binario: $BIN"
+          AG=$(find . -name 'frida-agent.dylib' -type f | head -1)
+          echo "bin: $BIN"
+          echo "agent: $AG"
           mkdir -p Payload/frida-server.app
           lipo "$BIN" -thin arm64 -output Payload/frida-server.app/frida-server
+          cp "$AG" Payload/frida-server.app/frida-agent.dylib
           chmod +x Payload/frida-server.app/frida-server
           file Payload/frida-server.app/frida-server
           codesign --remove-signature Payload/frida-server.app/frida-server || true
@@ -39,8 +42,8 @@ jobs:
           codesign --force --sign - --entitlements frida/entitlements.plist Payload/frida-server.app/frida-server
           echo "--- entitlements inyectados ---"
           codesign -d --entitlements :- Payload/frida-server.app/frida-server
+          ls -la Payload/frida-server.app/
           zip -r frida-server.tipa Payload
-          ls -la frida-server.tipa
 
       - name: release
         uses: softprops/action-gh-release@v2
@@ -48,15 +51,6 @@ jobs:
           tag_name: frida-${{ github.run_number }}
           name: frida-server ${{ github.run_number }}
           body: |
-            frida-server 17.26.3 empaquetado como tipa para TrollStore.
-            Instalar en el 7 Plus con:
+            frida-server 17.26.3 tipa.
             apple-magnifier://install?url=https://github.com/lyvstoremx/VEEX-IPA/releases/download/frida-${{ github.run_number }}/frida-server.tipa
           files: frida-server.tipa
-
-      - name: link
-        run: |
-          echo "### Instala esto en el 7 Plus" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          echo "apple-magnifier://install?url=https://github.com/lyvstoremx/VEEX-IPA/releases/download/frida-${{ github.run_number }}/frida-server.tipa" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
