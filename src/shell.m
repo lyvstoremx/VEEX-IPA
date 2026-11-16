@@ -1,4 +1,4 @@
-// src/shell.m — VEEX build 66
+// src/shell.m — VEEX build 67
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
@@ -24,8 +24,9 @@
 #include "lauxlib.h"
 #include "lualib.h"
 
-#define VX_BUILD 66
-#define VX_STAGE 0      // 0 = arranque limpio. Sube a 6 cuando abra
+#define VX_BUILD 67
+#define VX_STAGE 0
+#define VX_BOOT 0
 #define VX_HOOKSET 1
 #define VX_AUTOHOOK 0
 #define VX_FPS 20
@@ -78,7 +79,6 @@ static int vxInText(const void *p) {
     return (gTextLo && a >= gTextLo && a < gTextHi) ? 1 : 0;
 }
 
-// ============ LOG ============
 static void vxWriteSync(NSString *s) {
     if (!gDocs) return;
     NSString *p = [gDocs stringByAppendingPathComponent:@"veex.log"];
@@ -111,9 +111,6 @@ static void vxHex(const char *hex, unsigned char *out, int len) {
     for (int i = 0; i < len; i++) { unsigned v = 0; sscanf(hex + i * 2, "%2x", &v); out[i] = (unsigned char)v; }
 }
 
-// ============ HOOK INLINE ARM64 ============
-// El trampolín vive en una página asignada CERCA del objetivo, así el B de 4 bytes
-// del parche alcanza. Todas las direcciones lejanas se materializan con MOVZ/MOVK.
 #define VX_TRAMP_SLOTS 240
 #define VX_TRAMP_SZ    (VX_TRAMP_SLOTS * 64)
 
@@ -152,13 +149,13 @@ static int vxTrampNear(uint64_t target) {
 }
 
 static int vxBadInstr(uint32_t in) {
-    if ((in & 0x9F000000) == 0x90000000) return 1; // ADRP
-    if ((in & 0x7C000000) == 0x14000000) return 1; // B
-    if ((in & 0xFC000000) == 0x94000000) return 1; // BL
-    if ((in & 0xFF000010) == 0x54000000) return 1; // B.cond
-    if ((in & 0x7E000000) == 0x34000000) return 1; // CBZ / CBNZ
-    if ((in & 0x7E000000) == 0x36000000) return 1; // TBZ / TBNZ
-    if ((in & 0x3B000000) == 0x18000000) return 1; // LDR literal
+    if ((in & 0x9F000000) == 0x90000000) return 1;
+    if ((in & 0x7C000000) == 0x14000000) return 1;
+    if ((in & 0xFC000000) == 0x94000000) return 1;
+    if ((in & 0xFF000010) == 0x54000000) return 1;
+    if ((in & 0x7E000000) == 0x34000000) return 1;
+    if ((in & 0x7E000000) == 0x36000000) return 1;
+    if ((in & 0x3B000000) == 0x18000000) return 1;
     return 0;
 }
 
@@ -188,7 +185,6 @@ static int vxInlineHook(void *target, void *rep, void **origOut) {
 
     memcpy(tr, t, 16);
     vxEmitFar((uint32_t *)(tr + 16), (uint64_t)target + 16);
-
     vxEmitFar((uint32_t *)stb, (uint64_t)rep);
 
     int64_t delta = (int64_t)(stb - (uint8_t *)target);
@@ -222,7 +218,6 @@ static void vxHookName(const char *name, void *rep, void **origOut) {
     else vxLog(@"[VEEX] !%@ (%d)", @(name), r);
 }
 
-// ============ HOOKS ============
 static unsigned char *(*o_md5)(const void *, CC_LONG, unsigned char *) = NULL;
 static unsigned char *(*o_sha1)(const void *, CC_LONG, unsigned char *) = NULL;
 static unsigned char *(*o_sha256)(const void *, CC_LONG, unsigned char *) = NULL;
@@ -358,10 +353,9 @@ static void vxInstallHooks(void) {
     vxHookName("sysctl",       (void *)h_sysctl,       (void **)&o_sysctl);
 #endif
     if (!gMainHdr) gMainHdr = (uint64_t)_dyld_get_image_header(0);
-    vxLog(@"[VEEX] hooked=%d idx=%u main=%llx", gHooked, gMyIdx, gMainHdr);
+    vxLog(@"[VEEX] hooked=%d idx=%u", gHooked, gMyIdx);
 }
 
-// ============ ocultar imagen ============
 static void vxFindSelf(void) {
     Dl_info di;
     if (!dladdr((void *)vxFindSelf, &di) || !di.dli_fbase) return;
@@ -370,7 +364,6 @@ static void vxFindSelf(void) {
         if (_dyld_get_image_header(i) == di.dli_fbase) { gMyIdx = i; return; }
 }
 
-// parchea LC_ID_DYLIB (lo que devuelve _dyld_get_image_name), no LC_LOAD_DYLIB
 static void vxPatchLoadName(void) {
     if (!gMyIdx || gMyIdx == 0xFFFFFFFFu) return;
     const struct mach_header_64 *h = (const struct mach_header_64 *)_dyld_get_image_header(gMyIdx);
@@ -395,7 +388,6 @@ static void vxPatchLoadName(void) {
     }
 }
 
-// ============ reescritura del cuerpo ============
 static NSURLSessionDataTask *(*o_dt)(id, SEL, NSURLRequest *, void (^)(NSData *, NSURLResponse *, NSError *)) = NULL;
 static NSURLSessionUploadTask *(*o_ut)(id, SEL, NSURLRequest *, NSData *, void (^)(NSData *, NSURLResponse *, NSError *)) = NULL;
 
@@ -440,7 +432,6 @@ static void vxInstallBody(void) {
     if (u) o_ut = (void *)method_setImplementation(u, (IMP)h_ut);
 }
 
-// ============ Attest ============
 static void vxKillAttest(void) {
     Class c = NSClassFromString(@"DCAppAttestService");
     if (!c) { vxLog(@"[VEEX] attest sin clase"); return; }
@@ -467,7 +458,6 @@ static void vxFingerprint(void) {
     }
 }
 
-// ============ imagen ============
 static void vxSetBase(const struct mach_header_64 *h) {
     if (!h) return;
     gBase = (uint64_t)h;
@@ -511,7 +501,6 @@ static void vxPatchCryptid(void) {
     }
 }
 
-// ============ il2cpp ============
 typedef void *(*f_v)(void);
 typedef void *(*f_asms)(void *, size_t *);
 typedef void *(*f_p1)(void *);
@@ -551,7 +540,6 @@ static void vxLoadIL2CPP(void) {
     vxLog(@"[VEEX] il2cpp %@", gI2C ? @"OK" : @"FALLO");
 }
 
-// ============ dibujo ============
 typedef struct { int t; float x, y, w, h; float r, g, b, a; char s[72]; } vxCmd;
 #define VX_CMAX 512
 static vxCmd gCmd[VX_CMAX];
@@ -578,7 +566,7 @@ static void vxUnlock(void) { __atomic_clear((volatile void *)&gDrawLock, __ATOMI
         CGContextSetRGBFillColor(c, q->r, q->g, q->b, q->a);
         CGContextSetLineWidth(c, 1.4);
         if (q->t == 0) CGContextStrokeRect(c, CGRectMake(q->x, q->y, q->w, q->h));
-        else if (q->t == 1) { CGContextMoveToPoint(c, q->x, q->y); CGContextAddLineToPoint(c, q->w, q->h); CGContextStrokePath(c); }
+        else if (q->t == 1) { CGContextMoveToPoint(c, q->x, q->y); CGContextAddLineToPoint(c, q->x + q->w, q->y + q->h); CGContextStrokePath(c); }
         else if (q->t == 2) {
             UIFont *f = [UIFont monospacedSystemFontOfSize:11 weight:UIFontWeightBold];
             [[NSString stringWithUTF8String:q->s] drawAtPoint:CGPointMake(q->x, q->y)
@@ -600,6 +588,7 @@ static void vxUnlock(void) { __atomic_clear((volatile void *)&gDrawLock, __ATOMI
 
 @interface VXRow : UIButton
 - (void)vxPaint;
+- (void)vxTap;
 @end
 @implementation VXRow
 - (void)vxTap {
@@ -670,7 +659,6 @@ static int l_wf(lua_State *L) { *(float *)(uintptr_t)luaL_checkinteger(L,1) = (f
 
 static int l_i2c_ready(lua_State *L) { lua_pushboolean(L, gI2C); return 1; }
 
-// i2c_class("Nombre") o i2c_class("Namespace", "Nombre")
 static int l_i2c_class(lua_State *L) {
     const char *a1 = luaL_checkstring(L,1);
     const char *wantNs = NULL, *wantName = a1;
@@ -856,12 +844,11 @@ static int l_str(lua_State *L) {
     return 1;
 }
 
-// ============ script ============
 static void vxStopScript(void) { gRun = 0; }
 
 static void vxRunScript(void) {
     gRun = 0;
-    usleep(150000);                 // deja morir el loop anterior
+    usleep(150000);
     if (gL) { lua_close(gL); gL = NULL; }
     if (!gI2C) { vxLog(@"[VEEX] sin il2cpp"); return; }
 
@@ -912,7 +899,6 @@ static void vxRunScript(void) {
     });
 }
 
-// ============ UI ============
 static void vxBuildTab(void);
 
 static void addRow(NSString *title, NSString *key, CGFloat y) {
@@ -1115,7 +1101,6 @@ static void buildUI(UIWindowScene *sc) {
 - (void)vxDoCopy { UIPasteboard.generalPasteboard.string = gLog ?: @""; vxLog(@"[VEEX] log copiado"); }
 @end
 
-// ============ arranque ============
 static void boot(double delay) {
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay * NSEC_PER_SEC)),
                    dispatch_get_main_queue(), ^{
@@ -1129,8 +1114,10 @@ static void boot(double delay) {
 
 __attribute__((constructor)) static void vxInit(void) {
     if (!gLog) gLog = [NSMutableString new];
-    vxLog(@"[VEEX] build %d stage=%d", VX_BUILD, VX_STAGE);
+    gDocs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
+    vxLog(@"[VEEX] build %d boot=%d stage=%d", VX_BUILD, VX_BOOT, VX_STAGE);
     gMainHdr = (uint64_t)_dyld_get_image_header(0);
+#if VX_BOOT >= 1
     if (gMainHdr) {
         size_t sz = 0;
         uint8_t *p = getsegmentdata((const struct mach_header_64 *)gMainHdr, "__TEXT", &sz);
@@ -1138,18 +1125,18 @@ __attribute__((constructor)) static void vxInit(void) {
     }
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
         @autoreleasepool {
-            gDocs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
             vxLoadIL2CPP();
+#if VX_BOOT >= 2
             for (int i = 0; i < 40 && !gBase; i++) { vxFindImage(); if (!gBase) [NSThread sleepForTimeInterval:0.5]; }
             vxLog(@"[VEEX] base=%llx", gBase);
-#if VX_STAGE >= 3
-            vxFindSelf(); vxPatchLoadName(); vxKillAttest();
 #endif
             [NSThread sleepForTimeInterval:2.0];
-#if VX_STAGE >= 4
-            vxPatchCryptid();
-#endif
+#if VX_BOOT >= 3
             boot(1.5);
+#endif
         }
     });
+#else
+    vxLog(@"[VEEX] solo constructor");
+#endif
 }
