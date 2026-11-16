@@ -1,4 +1,4 @@
-// src/shell.m — VEEX build 71
+// src/shell.m — VEEX build 72
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
@@ -24,7 +24,7 @@
 #include "lauxlib.h"
 #include "lualib.h"
 
-#define VX_BUILD 71
+#define VX_BUILD 72
 #define VX_STAGE 0
 #define VX_BOOT 3
 #define VX_HOOKSET 1
@@ -531,8 +531,27 @@ static f_att p_att; static f_p1 p_kl;
 static f_ns p_cns; static f_meths p_ml; static f_mname p_mn;
 static int gI2C = 0;
 
+static char gUnityPath[1024];
+
+static void vxFindUnityPath(void) {
+    if (gUnityPath[0]) return;
+    uint32_t n = _dyld_image_count();
+    for (uint32_t i = 0; i < n; i++) {
+        const char *nm = _dyld_get_image_name(i);
+        if (nm && strstr(nm, "UnityFramework")) {
+            strncpy(gUnityPath, nm, sizeof(gUnityPath) - 1);
+            return;
+        }
+    }
+}
+
 static void vxLoadIL2CPP(void) {
-    void *h = dlopen(NULL, RTLD_NOW);
+    if (gI2C) return;
+    void *h = NULL;
+    vxFindUnityPath();
+    if (gUnityPath[0]) h = dlopen(gUnityPath, RTLD_NOW);
+    if (!h) h = dlopen(NULL, RTLD_NOW);
+    if (!h) { vxLog(@"[VEEX] il2cpp sin handle"); return; }
 #define R(n, v) v = (void *)dlsym(h, n)
     R("il2cpp_domain_get", p_dom);
     R("il2cpp_thread_attach", p_att);
@@ -547,9 +566,9 @@ static void vxLoadIL2CPP(void) {
     R("il2cpp_class_get_method_from_name", p_mf);
     R("il2cpp_object_get_class", p_kl);
 #undef R
-    gI2C = p_dom && p_asms && p_img && p_cc && p_ci && p_cn && p_mf && p_kl;
-    if (gI2C && p_att) p_att(p_dom());
-    vxLog(@"[VEEX] il2cpp %@", gI2C ? @"OK" : @"FALLO");
+    gI2C = p_dom && p_att && p_asms && p_img && p_cc && p_ci && p_cn && p_mf && p_kl;
+    if (gI2C) { p_att(p_dom()); vxLog(@"[VEEX] il2cpp OK (attach)"); }
+    else vxLog(@"[VEEX] il2cpp FALLO");
 }
 
 typedef struct { int t; float x, y, w, h; float r, g, b, a; char s[72]; } vxCmd;
@@ -595,6 +614,7 @@ static void vxInstallBody(void);
 static void vxInstallHooks(void);
 static void vxFindSelf(void);
 static void vxPatchLoadName(void);
+static void vxPatchCryptid(void);
 static void vxKillAttest(void);
 static void vxFingerprint(void);
 static void vxRunScript(void);
@@ -616,7 +636,7 @@ static void vxStopScript(void);
 }
 - (void)vxDoClose { gOpen = !gOpen; gPanel.hidden = !gOpen; }
 - (void)vxDoTab:(UIButton *)b { gTab = (int)b.tag; vxBuildTab(); }
-- (void)vxDoHook { vxInstallBody(); vxInstallHooks(); vxFindSelf(); vxPatchLoadName(); vxKillAttest(); vxFingerprint(); }
+- (void)vxDoHook { vxInstallBody(); vxInstallHooks(); vxFindSelf(); vxPatchLoadName(); vxPatchCryptid(); vxKillAttest(); vxFingerprint(); }
 - (void)vxDoRun { vxRunScript(); }
 - (void)vxDoStop { vxStopScript(); vxLog(@"[VEEX] stop"); }
 - (void)vxDoCopy { UIPasteboard.generalPasteboard.string = gLog ?: @""; vxLog(@"[VEEX] log copiado"); }
@@ -1166,14 +1186,16 @@ __attribute__((constructor)) static void vxInit(void) {
     }
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
         @autoreleasepool {
-            vxLoadIL2CPP();
 #if VX_BOOT >= 2
-            for (int i = 0; i < 40 && !gBase; i++) { vxFindImage(); if (!gBase) [NSThread sleepForTimeInterval:0.5]; }
+            for (int i = 0; i < 60 && !gBase; i++) { vxFindImage(); if (!gBase) [NSThread sleepForTimeInterval:0.5]; }
             vxLog(@"[VEEX] base=%llx", gBase);
+            for (int i = 0; i < 40 && !gI2C; i++) { vxLoadIL2CPP(); if (!gI2C) [NSThread sleepForTimeInterval:0.5]; }
+#else
+            vxLoadIL2CPP();
 #endif
-            [NSThread sleepForTimeInterval:2.0];
+            [NSThread sleepForTimeInterval:1.0];
 #if VX_BOOT >= 3
-            boot(1.5);
+            boot(1.0);
 #endif
         }
     });
