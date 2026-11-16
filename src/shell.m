@@ -1,4 +1,4 @@
-// src/shell.m — VEEX build 76
+// src/shell.m — VEEX build 77
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
@@ -25,7 +25,7 @@
 #include "lauxlib.h"
 #include "lualib.h"
 
-#define VX_BUILD 76
+#define VX_BUILD 77
 #define VX_STAGE 0
 #define VX_BOOT 3
 #define VX_HOOKSET 0
@@ -627,6 +627,7 @@ static void vxKillAttest(void);
 static void vxFingerprint(void);
 static void vxRunScript(void);
 static void vxStopScript(void);
+static void vxResetGuest(void);
 
 @interface VXRoot : UIView
 - (void)vxDoClose;
@@ -739,6 +740,15 @@ static int l_r32(lua_State *L) { lua_pushinteger(L, *(uint32_t *)(uintptr_t)luaL
 static int l_w32(lua_State *L) { *(uint32_t *)(uintptr_t)luaL_checkinteger(L,1) = (uint32_t)luaL_checkinteger(L,2); return 0; }
 static int l_rf(lua_State *L) { lua_pushnumber(L, *(float *)(uintptr_t)luaL_checkinteger(L,1)); return 1; }
 static int l_wf(lua_State *L) { *(float *)(uintptr_t)luaL_checkinteger(L,1) = (float)luaL_checknumber(L,2); return 0; }
+
+static int l_reset(lua_State *L) { (void)L; dispatch_async(dispatch_get_main_queue(), ^{ vxResetGuest(); }); return 0; }
+static int l_reload(lua_State *L) {
+    (void)L;
+    gRun = 0;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.4 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{ vxRunScript(); });
+    return 0;
+}
 
 static int l_i2c_ready(lua_State *L) { lua_pushboolean(L, gI2C); return 1; }
 
@@ -938,6 +948,63 @@ static int l_w2s(lua_State *L) {
 
 static void vxStopScript(void) { gRun = 0; }
 
+static void vxResetGuest(void) {
+    vxLog(@"[VEEX] RESET GUEST...");
+    NSArray *pats = @[@"freefire", @"garena", @"dts", @"badger6804"];
+    NSMutableArray *del = [NSMutableArray array];
+
+    NSDictionary *q = @{ (__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword,
+                         (__bridge id)kSecReturnAttributes: @YES,
+                         (__bridge id)kSecMatchLimit: (__bridge id)kSecMatchLimitAll };
+    CFTypeRef res = NULL;
+    OSStatus st = SecItemCopyMatching((__bridge CFDictionaryRef)q, &res);
+    vxLog(@"[VEEX] keychain lectura=%d", (int)st);
+    if (st == errSecSuccess && res) {
+        for (NSDictionary *d in (__bridge NSArray *)res) {
+            NSString *svc = [d[(__bridge id)kSecAttrService] description] ?: @"";
+            NSString *acc = [d[(__bridge id)kSecAttrAccount] description] ?: @"";
+            NSString *all = [[svc stringByAppendingString:@"|"] stringByAppendingString:acc].lowercaseString;
+            for (NSString *p in pats) if ([all containsString:p]) { [del addObject:d]; break; }
+        }
+        CFRelease(res);
+    }
+    for (NSDictionary *d in del) {
+        NSMutableDictionary *dq = [NSMutableDictionary dictionary];
+        dq[(__bridge id)kSecClass] = (__bridge id)kSecClassGenericPassword;
+        if (d[(__bridge id)kSecAttrService]) dq[(__bridge id)kSecAttrService] = d[(__bridge id)kSecAttrService];
+        if (d[(__bridge id)kSecAttrAccount]) dq[(__bridge id)kSecAttrAccount] = d[(__bridge id)kSecAttrAccount];
+        SecItemDelete((__bridge CFDictionaryRef)dq);
+    }
+    vxLog(@"[VEEX] keychain borrados=%lu", (unsigned long)del.count);
+    if (del.count == 0) {
+        SecItemDelete((__bridge CFDictionaryRef)@{(__bridge id)kSecClass:(__bridge id)kSecClassGenericPassword});
+        vxLog(@"[VEEX] keychain: borrado total");
+    }
+
+    NSString *pref = @"/var/mobile/Library/Preferences";
+    NSArray *pf = [[NSFileManager defaultManager] contentsOfDirectoryAtPath:pref error:nil];
+    if (!pf) { vxLog(@"[VEEX] prefs sin acceso"); }
+    else {
+        int np = 0;
+        for (NSString *f in pf) if ([f hasPrefix:@"com.dts."]) {
+            if ([[NSFileManager defaultManager] removeItemAtPath:[pref stringByAppendingPathComponent:f] error:nil]) np++;
+        }
+        vxLog(@"[VEEX] prefs borrados=%d", np);
+    }
+
+    NSArray *keep = @[@"veex.log", @"classes.txt", @"names.txt", @"esp.lua"];
+    NSArray *df = [[NSFileManager defaultManager] contentsOfDirectoryAtPath:gDocs error:nil];
+    int nd = 0;
+    for (NSString *f in df) if (![keep containsObject:f]) {
+        if ([[NSFileManager defaultManager] removeItemAtPath:[gDocs stringByAppendingPathComponent:f] error:nil]) nd++;
+    }
+    vxLog(@"[VEEX] documents borrados=%d", nd);
+
+    vxLog(@"[VEEX] RESET hecho, cerrando en 2s");
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{ exit(0); });
+}
+
 static void vxRegister(lua_State *L) {
     lua_register(L, "log", l_log); lua_register(L, "text", l_text);
     lua_register(L, "rect", l_rect); lua_register(L, "line", l_line); lua_register(L, "clear", l_clear);
@@ -945,6 +1012,7 @@ static void vxRegister(lua_State *L) {
     lua_register(L, "r32", l_r32); lua_register(L, "w32", l_w32);
     lua_register(L, "rf", l_rf); lua_register(L, "wf", l_wf);
     lua_register(L, "cfg", l_cfg); lua_register(L, "setcfg", l_setcfg);
+    lua_register(L, "reset", l_reset); lua_register(L, "reload", l_reload);
     lua_register(L, "i2c_ready", l_i2c_ready); lua_register(L, "i2c_class", l_i2c_class);
     lua_register(L, "i2c_mptr", l_i2c_mptr); lua_register(L, "kl", l_kl);
     lua_register(L, "dump", l_dump); lua_register(L, "meths", l_meths);
@@ -1087,19 +1155,6 @@ static void vxBuildTab(void) {
         addRow(@"Buscar Avatar", @"dbg.avatar", y); y += 36;
         addRow(@"Buscar Camera", @"dbg.camera", y);
     }
-}
-
-static void vxResetGuest(void) {
-    vxLog(@"[VEEX] RESET GUEST...");
-    SecItemDelete((__bridge CFDictionaryRef)@{(__bridge id)kSecClass:(__bridge id)kSecClassGenericPassword});
-    SecItemDelete((__bridge CFDictionaryRef)@{(__bridge id)kSecClass:(__bridge id)kSecClassInternetPassword});
-    NSString *pref = @"/var/mobile/Library/Preferences";
-    for (NSString *f in [[NSFileManager defaultManager] contentsOfDirectoryAtPath:pref error:nil])
-        if ([f hasPrefix:@"com.dts.freefireth"])
-            [[NSFileManager defaultManager] removeItemAtPath:[pref stringByAppendingPathComponent:f] error:nil];
-    vxLog(@"[VEEX] RESET hecho");
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)),
-                   dispatch_get_main_queue(), ^{ exit(0); });
 }
 
 static void buildUI(UIWindowScene *sc) {
