@@ -1,0 +1,52 @@
+name: frida-server tipa
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: deps
+        run: brew install ldid xz
+
+      - name: wrap
+        run: |
+          set -euo pipefail
+          V=17.26.3
+          curl -fL -o fs.xz "https://github.com/frida/frida/releases/download/$V/frida-server-$V-ios-arm64.xz"
+          unxz fs.xz
+          file fs
+          mkdir -p Payload/frida-server.app
+          cp fs Payload/frida-server.app/frida-server
+          chmod +x Payload/frida-server.app/frida-server
+          cp frida/Info.plist Payload/frida-server.app/Info.plist
+          ldid -S frida/entitlements.plist Payload/frida-server.app/frida-server
+          echo "--- entitlements inyectados ---"
+          ldid -e Payload/frida-server.app/frida-server
+          zip -r frida-server.tipa Payload
+          ls -la frida-server.tipa
+
+      - name: release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: frida-${{ github.run_number }}
+          name: frida-server ${{ github.run_number }}
+          body: |
+            frida-server 17.26.3 empaquetado como tipa para TrollStore.
+            Instalar en el 7 Plus con:
+            apple-magnifier://install?url=https://github.com/lyvstoremx/VEEX-IPA/releases/download/frida-${{ github.run_number }}/frida-server.tipa
+          files: frida-server.tipa
+
+      - name: link
+        run: |
+          echo "### Instala esto en el 7 Plus" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "apple-magnifier://install?url=https://github.com/lyvstoremx/VEEX-IPA/releases/download/frida-${{ github.run_number }}/frida-server.tipa" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
