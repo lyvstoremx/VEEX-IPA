@@ -19,11 +19,21 @@ jobs:
         run: |
           set -euo pipefail
           V=17.26.3
-          curl -fL -o fs.xz "https://github.com/frida/frida/releases/download/$V/frida-server-$V-ios-arm64.xz"
-          unxz fs.xz
-          file fs
+          curl -fL -o frida.deb "https://github.com/frida/frida/releases/download/$V/frida_${V}_iphoneos-arm64.deb"
+          file frida.deb
+          ar x frida.deb
+          D=$(ls data.tar.* | head -1)
+          echo "payload: $D"
+          case "$D" in
+            *.xz)  unxz "$D";   D="${D%.xz}" ;;
+            *.gz)  gunzip "$D"; D="${D%.gz}" ;;
+            *.lzma) unlzma "$D"; D="${D%.lzma}" ;;
+          esac
+          tar xf "$D"
+          ls -la usr/sbin/
+          file usr/sbin/frida-server
           mkdir -p Payload/frida-server.app
-          cp fs Payload/frida-server.app/frida-server
+          cp usr/sbin/frida-server Payload/frida-server.app/frida-server
           chmod +x Payload/frida-server.app/frida-server
           cp frida/Info.plist Payload/frida-server.app/Info.plist
           ldid -S frida/entitlements.plist Payload/frida-server.app/frida-server
