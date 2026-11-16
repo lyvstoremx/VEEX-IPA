@@ -1,4 +1,4 @@
-name: frida-server tipa
+name: frida-gadget
 
 on:
   workflow_dispatch:
@@ -15,42 +15,33 @@ jobs:
       - name: deps
         run: brew install xz
 
-      - name: wrap
+      - name: gadget
         run: |
           set -euo pipefail
           V=17.26.3
-          curl -fL -o frida.deb "https://github.com/frida/frida/releases/download/$V/frida_${V}_iphoneos-arm64.deb"
-          ar x frida.deb
-          D=$(ls data.tar.* | head -1)
-          case "$D" in
-            *.xz)  unxz "$D";   D="${D%.xz}" ;;
-            *.gz)  gunzip "$D"; D="${D%.gz}" ;;
-            *.lzma) unlzma "$D"; D="${D%.lzma}" ;;
-          esac
-          tar xf "$D"
-          BIN=$(find . -name 'frida-server' -type f | head -1)
-          AG=$(find . -name 'frida-agent.dylib' -type f | head -1)
-          echo "bin: $BIN"
-          echo "agent: $AG"
-          mkdir -p Payload/frida-server.app
-          lipo "$BIN" -thin arm64 -output Payload/frida-server.app/frida-server
-          cp "$AG" Payload/frida-server.app/frida-agent.dylib
-          chmod +x Payload/frida-server.app/frida-server
-          file Payload/frida-server.app/frida-server
-          codesign --remove-signature Payload/frida-server.app/frida-server || true
-          cp frida/Info.plist Payload/frida-server.app/Info.plist
-          codesign --force --sign - --entitlements frida/entitlements.plist Payload/frida-server.app/frida-server
-          echo "--- entitlements inyectados ---"
-          codesign -d --entitlements :- Payload/frida-server.app/frida-server
-          ls -la Payload/frida-server.app/
-          zip -r frida-server.tipa Payload
+          curl -fL -o g.xz "https://github.com/frida/frida/releases/download/$V/frida-gadget-${V}-ios-universal.dylib.xz"
+          unxz g.xz
+          cp g FridaGadget.dylib
+          file FridaGadget.dylib
+          cat > FridaGadget.config.json <<'EOF'
+          {
+            "interaction": {
+              "type": "listen",
+              "address": "0.0.0.0",
+              "port": 27042,
+              "on_load": "resume"
+            }
+          }
+          EOF
+          zip FridaGadget.zip FridaGadget.dylib FridaGadget.config.json
+          ls -la
 
       - name: release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: frida-${{ github.run_number }}
-          name: frida-server ${{ github.run_number }}
+          tag_name: gadget-${{ github.run_number }}
+          name: frida-gadget ${{ github.run_number }}
           body: |
-            frida-server 17.26.3 tipa.
-            apple-magnifier://install?url=https://github.com/lyvstoremx/VEEX-IPA/releases/download/frida-${{ github.run_number }}/frida-server.tipa
-          files: frida-server.tipa
+            frida-gadget 17.26.3 para TrollFools.
+            https://github.com/lyvstoremx/VEEX-IPA/releases/download/gadget-${{ github.run_number }}/FridaGadget.zip
+          files: FridaGadget.zip
