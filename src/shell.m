@@ -1,4 +1,4 @@
-// src/shell.m — VEEX build 75
+// src/shell.m — VEEX build 76
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
@@ -25,7 +25,7 @@
 #include "lauxlib.h"
 #include "lualib.h"
 
-#define VX_BUILD 75
+#define VX_BUILD 76
 #define VX_STAGE 0
 #define VX_BOOT 3
 #define VX_HOOKSET 0
@@ -455,13 +455,17 @@ static void vxKillAttest(void) {
 }
 
 static void vxFingerprint(void) {
-    vxLog(@"[VEEX] bundle=%@", [[NSBundle mainBundle] bundleIdentifier]);
+    vxLog(@"[VEEX] F1 bundle=%@", [[NSBundle mainBundle] bundleIdentifier]);
     void *sec = p_security ? p_security : dlopen("/System/Library/Frameworks/Security.framework/Security", RTLD_NOW);
+    vxLog(@"[VEEX] F2 sec=%p", sec);
     if (!sec) return;
-    void *(*mk)(void) = (void *(*)(void))dlsym(sec, "SecTaskCreateFromSelf");
+    void *(*mk)(void *) = (void *(*)(void *))dlsym(sec, "SecTaskCreateFromSelf");
     CFTypeRef (*get)(void *, CFStringRef, void **) = (CFTypeRef (*)(void *, CFStringRef, void **))dlsym(sec, "SecTaskCopyValueForEntitlement");
+    vxLog(@"[VEEX] F3 mk=%p get=%p", mk, get);
     if (!mk || !get) return;
-    void *t = mk(); if (!t) return;
+    void *t = mk(NULL);
+    vxLog(@"[VEEX] F4 task=%p", t);
+    if (!t) return;
     const char *keys[] = { "application-identifier", "com.apple.developer.team-identifier", "get-task-allow", "aps-environment" };
     for (int i = 0; i < 4; i++) {
         CFStringRef k = CFStringCreateWithCString(NULL, keys[i], kCFStringEncodingUTF8);
@@ -470,6 +474,8 @@ static void vxFingerprint(void) {
         else vxLog(@"[VEEX] ent %s=(nil)", keys[i]);
         CFRelease(k);
     }
+    CFRelease(t);
+    vxLog(@"[VEEX] F5 fin");
 }
 
 static void vxSetBase(const struct mach_header_64 *h) {
