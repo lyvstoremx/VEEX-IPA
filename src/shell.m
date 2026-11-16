@@ -1,4 +1,4 @@
-// src/shell.m — VEEX build 68
+// src/shell.m — VEEX build 69
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
@@ -24,9 +24,9 @@
 #include "lauxlib.h"
 #include "lualib.h"
 
-#define VX_BUILD 68
+#define VX_BUILD 69
 #define VX_STAGE 0
-#define VX_BOOT 0
+#define VX_BOOT 1
 #define VX_HOOKSET 1
 #define VX_AUTOHOOK 0
 #define VX_FPS 20
@@ -249,7 +249,7 @@ static unsigned char *h_md5(const void *d, CC_LONG len, unsigned char *md) {
 static unsigned char *h_sha1(const void *d, CC_LONG len, unsigned char *md) {
     unsigned char *r = o_sha1 ? o_sha1(d, len, md) : NULL;
     gHitSha1++;
-    if (r && md && d && len > 20) {
+    if (r && md && len > 20) {
         const unsigned char *b = (const unsigned char *)d;
         if (b[0] == 0xfa && b[1] == 0xde && b[2] == 0x0c && b[3] == 0x02) { vxHex(VX_CD, md, 20); gForced++; }
     }
@@ -361,7 +361,7 @@ static void vxInstallHooks(void) {
 #endif
 #if VX_HOOKSET >= 4
     vxHookName("csops",        (void *)h_csops,        (void **)&o_csops);
-    vxHookName("sysctlbyname", (void *)h_sysctctlbyname, (void **)&o_sysctlbyname);
+    vxHookName("sysctlbyname", (void *)h_sysctlbyname, (void **)&o_sysctlbyname);
     vxHookName("sysctl",       (void *)h_sysctl,       (void **)&o_sysctl);
 #endif
     if (!gMainHdr) gMainHdr = (uint64_t)_dyld_get_image_header(0);
