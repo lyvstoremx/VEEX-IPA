@@ -1,4 +1,4 @@
-// src/shell.m — VEEX build 94
+// src/shell.m — VEEX build 95
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
@@ -25,7 +25,7 @@
 #include "lauxlib.h"
 #include "lualib.h"
 
-#define VX_BUILD 94
+#define VX_BUILD 95
 #define VX_STAGE 0
 #define VX_BOOT 3
 #define VX_HOOKSET 0
@@ -168,7 +168,10 @@ static int vxReloc(uint32_t in, uint64_t at, uint32_t *out) {
 static int vxTrampAny(void) {
     if (gTrampPage) return 0;
     void *p = mmap(NULL, VX_TRAMP_SZ, PROT_READ | PROT_WRITE | PROT_EXEC,
-                   MAP_PRIVATE | MAP_ANON, -1, 0);
+                   MAP_PRIVATE | MAP_ANON | MAP_JIT, -1, 0);
+    if (p == MAP_FAILED)
+        p = mmap(NULL, VX_TRAMP_SZ, PROT_READ | PROT_WRITE | PROT_EXEC,
+                 MAP_PRIVATE | MAP_ANON, -1, 0);
     if (p == MAP_FAILED) { vxLog(@"[VEEX] tramp mmap fallo"); return -7; }
     gTrampPage = (uint8_t *)p;
     vxLog(@"[VEEX] tramp=%p", gTrampPage);
@@ -1202,6 +1205,26 @@ __attribute__((naked)) static void h_harvest(void) {
     );
 }
 
+static int l_teststub(lua_State *L) {
+    gHarvestN = 0;
+    gOrig1 = NULL;
+    ((void (*)(void *))h_harvest)((void *)0x1234);
+    lua_pushinteger(L, gHarvestN);
+    return 1;
+}
+
+static int l_testtramp(lua_State *L) {
+    int r = vxTrampAny();
+    if (r) { lua_pushinteger(L, r); return 1; }
+    uint8_t *tr = gTrampPage + (size_t)(gTrampSlot++) * VX_SLOT;
+    vxEmitAbs((uint32_t *)tr, (uint64_t)h_harvest_c);
+    if (p_icache) p_icache(tr, VX_SLOT);
+    gHarvestN = 0;
+    ((void (*)(void *))tr)((void *)0x5678);
+    lua_pushinteger(L, gHarvestN);
+    return 1;
+}
+
 static int l_hook1(lua_State *L) {
     uint64_t a = (uint64_t)luaL_checkinteger(L, 1);
     gHarvestN = 0;
@@ -1243,6 +1266,7 @@ static void vxRegister(lua_State *L) {
     lua_register(L, "hook1", l_hook1); lua_register(L, "hv_count", l_hv_count);
     lua_register(L, "hv_get", l_hv_get); lua_register(L, "hv_clear", l_hv_clear);
     lua_register(L, "r64", l_r64);
+    lua_register(L, "teststub", l_teststub); lua_register(L, "testtramp", l_testtramp);
     lua_register(L, "call", l_call); lua_register(L, "callv", l_callv);
     lua_register(L, "arrlen", l_arrlen); lua_register(L, "arrat", l_arrat);
     lua_register(L, "pos3", l_pos3); lua_register(L, "gete", l_gete);
