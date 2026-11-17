@@ -1,4 +1,4 @@
-// src/shell.m — VEEX build 96
+// src/shell.m — VEEX build 97
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
@@ -25,7 +25,7 @@
 #include "lauxlib.h"
 #include "lualib.h"
 
-#define VX_BUILD 96
+#define VX_BUILD 97
 #define VX_STAGE 0
 #define VX_BOOT 3
 #define VX_HOOKSET 0
@@ -129,8 +129,7 @@ static void vxHex(const char *hex, unsigned char *out, int len) {
 #define VX_SLOT        128
 #define VX_TRAMP_SZ    (VX_TRAMP_SLOTS * VX_SLOT)
 
-static uint8_t gTrampBuf[VX_TRAMP_SZ]
-    __attribute__((section("__TEXT,__vxtramp"), aligned(0x4000))) = {1};
+static uint8_t gTrampBuf[VX_TRAMP_SZ] __attribute__((aligned(16)));
 
 static int gTrampSlot = 0;
 static int gHooked = 0;
@@ -167,14 +166,44 @@ static int vxReloc(uint32_t in, uint64_t at, uint32_t *out) {
     return 1;
 }
 
-static int vxSlotW(uint8_t *tr) {
-    uint64_t pg = (uint64_t)tr & ~(VX_PG - 1);
-    return mprotect((void *)pg, VX_PG, PROT_READ | PROT_WRITE);
+static void vxFlush(void *p, size_t n) {
+    uint64_t a = (uint64_t)p & ~(uint64_t)15;
+    uint64_t e = ((uint64_t)p + n + 15) & ~(uint64_t)15;
+    for (uint64_t x = a; x < e; x += 16) __asm__ volatile("dc cvau, %0" :: "r"(x) : "memory");
+    __asm__ volatile("dsb ish" ::: "memory");
+    for (uint64_t x = a; x < e; x += 16) __asm__ volatile("ic ivau, %0" :: "r"(x) : "memory");
+    __asm__ volatile("dsb ish" ::: "memory");
+    __asm__ volatile("isb" ::: "memory");
+    if (p_icache) p_icache(p, n);
 }
 
-static int vxSlotX(uint8_t *tr) {
-    uint64_t pg = (uint64_t)tr & ~(VX_PG - 1);
-    return mprotect((void *)pg, VX_PG, PROT_READ | PROT_EXEC);
+static uint8_t *vxTrampAlloc(void) {
+    vm_address_t a = 0;
+    if (vm_allocate(mach_task_self(), &a, VX_SLOT, VM_FLAGS_ANYWHERE) != KERN_SUCCESS) return NULL;
+    if (vm_protect(mach_task_self(), a, VX_SLOT, false, VM_PROT_READ | VM_PROT_WRITE) != KERN_SUCCESS) {
+        vm_deallocate(mach_task_self(), a, VX_SLOT);
+        return NULL;
+    }
+    return (uint8_t *)a;
+}
+
+static int vxTrampExec(uint8_t *tr) {
+    vxFlush(tr, VX_SLOT);
+    return vm_protect(mach_task_self(), (vm_address_t)tr, VX_SLOT, false,
+                      VM_PROT_READ | VM_PROT_EXECUTE);
+}
+
+static int vxTrampPrep(uint8_t **out) {
+    uint8_t *tr = vxTrampAlloc();
+    int via = tr ? 1 : 0;
+    if (!tr) {
+        if (gTrampSlot >= VX_TRAMP_SLOTS) return -9;
+        tr = gTrampBuf + (size_t)(gTrampSlot++) * VX_SLOT;
+        if (mprotect((void *)((uint64_t)tr & ~(VX_PG - 1)), VX_PG, PROT_READ | PROT_WRITE) != 0) return -11;
+    }
+    *out = tr;
+    vxLog(@"[VEEX] tramp=%p via=%d", tr, via);
+    return 0;
 }
 
 static int vxBadInstr(uint32_t in) {
@@ -206,12 +235,11 @@ static int vxInlineHook(void *target, void *rep, void **origOut) {
     vxLog(@"[VEEX] w %08x %08x %08x %08x", t[0], t[1], t[2], t[3]);
     for (int i = 0; i < 4; i++) if (vxBadInstr(t[i])) return -2 - i;
 
-    uint8_t *tr  = gTrampBuf + (size_t)(gTrampSlot++) * VX_SLOT;
+    uint8_t *tr = NULL;
+    int pr = vxTrampPrep(&tr);
+    vxLog(@"[VEEX] prep=%d", pr);
+    if (pr != 0) return pr;
     uint8_t *stb = tr + 96;
-
-    int w1 = vxSlotW(tr);
-    vxLog(@"[VEEX] slotw=%d tr=%p", w1, tr);
-    if (w1 != 0) return -11;
 
     uint32_t *w = (uint32_t *)tr;
     for (int i = 0; i < 4; i++) w += vxReloc(t[i], (uint64_t)target + (uint64_t)i * 4, w);
@@ -239,9 +267,9 @@ static int vxInlineHook(void *target, void *rep, void **origOut) {
     memcpy(t, patch, 16);
     vxLog(@"[VEEX] patched %08x", t[0]);
 
-    int x1 = vxSlotX(tr);
+    int x1 = vxTrampExec(tr);
     vxLog(@"[VEEX] slotx=%d", x1);
-    if (p_icache) { p_icache(tr, VX_SLOT); p_icache(t, 16); }
+    vxFlush(t, 16);
     return 0;
 }
 
@@ -1213,15 +1241,14 @@ static int l_teststub(lua_State *L) {
 }
 
 static int l_testtramp(lua_State *L) {
-    if (gTrampSlot >= VX_TRAMP_SLOTS) { lua_pushinteger(L, -9); return 1; }
-    uint8_t *tr = gTrampBuf + (size_t)(gTrampSlot++) * VX_SLOT;
-    int w1 = vxSlotW(tr);
-    vxLog(@"[VEEX] tslotw=%d tr=%p", w1, tr);
-    if (w1 != 0) { lua_pushinteger(L, -11); return 1; }
+    uint8_t *tr = NULL;
+    int pr = vxTrampPrep(&tr);
+    vxLog(@"[VEEX] tprep=%d", pr);
+    if (pr != 0) { lua_pushinteger(L, pr); return 1; }
     vxEmitAbs((uint32_t *)tr, (uint64_t)h_harvest_c);
-    int x1 = vxSlotX(tr);
+    int x1 = vxTrampExec(tr);
     vxLog(@"[VEEX] tslotx=%d", x1);
-    if (p_icache) p_icache(tr, VX_SLOT);
+    if (x1 != 0) { lua_pushinteger(L, -11); return 1; }
     gHarvestN = 0;
     ((void (*)(void *))tr)((void *)0x5678);
     lua_pushinteger(L, gHarvestN);
@@ -1532,11 +1559,14 @@ static void buildUI(UIWindowScene *sc) {
 static void boot(double delay) {
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay * NSEC_PER_SEC)),
                    dispatch_get_main_queue(), ^{
+        static int tries = 0;
+        if (gWin) return;
         UIWindowScene *sc = nil;
         for (UIScene *s in UIApplication.sharedApplication.connectedScenes)
             if ([s isKindOfClass:[UIWindowScene class]]) { sc = (UIWindowScene *)s; break; }
-        if (!sc) { vxLog(@"[VEEX] sin escena"); return; }
-        buildUI(sc);
+        if (sc) { buildUI(sc); vxRaw("=== UI montada ==="); return; }
+        if (++tries > 15) { vxRaw("=== UI sin escena ==="); return; }
+        boot(1.0);
     });
 }
 
@@ -1561,6 +1591,8 @@ static void vxProbeSelf(void) {
 
 __attribute__((constructor)) static void vxInit(void) {
     vxRaw("=== build %d: constructor entra ===", VX_BUILD);
+    if (!p_icache) p_icache = (void (*)(void *, size_t))dlsym(RTLD_DEFAULT, "sys_icache_invalidate");
+    vxRaw("=== icache=%p ===", p_icache);
     if (!gLog) gLog = [NSMutableString new];
     gDocs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
     vxLog(@"[VEEX] build %d boot=%d stage=%d", VX_BUILD, VX_BOOT, VX_STAGE);
@@ -1581,6 +1613,9 @@ __attribute__((constructor)) static void vxInit(void) {
         uint8_t *p = getsegmentdata((const struct mach_header_64 *)gMainHdr, "__TEXT", &sz);
         if (p && sz) { gTextLo = (uint64_t)p; gTextHi = (uint64_t)p + sz; gTextSz = sz; }
     }
+#if VX_BOOT >= 3
+    dispatch_async(dispatch_get_main_queue(), ^{ boot(0.8); });
+#endif
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
         @autoreleasepool {
 #if VX_BOOT >= 2
@@ -1589,10 +1624,6 @@ __attribute__((constructor)) static void vxInit(void) {
             for (int i = 0; i < 40 && !gI2C; i++) { vxLoadIL2CPP(); if (!gI2C) [NSThread sleepForTimeInterval:0.5]; }
 #else
             vxLoadIL2CPP();
-#endif
-            [NSThread sleepForTimeInterval:1.0];
-#if VX_BOOT >= 3
-            boot(1.0);
 #endif
         }
     });
