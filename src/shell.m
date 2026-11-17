@@ -1,4 +1,4 @@
-// src/shell.m — VEEX build 102
+// src/shell.m — VEEX build 103
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
@@ -7,6 +7,8 @@
 #import <objc/runtime.h>
 #import <objc/message.h>
 #import <mach/mach.h>
+#import <mach/mach_vm.h>
+#import <mach/vm_region.h>
 #import <mach-o/dyld.h>
 #import <mach-o/loader.h>
 #import <mach-o/getsect.h>
@@ -25,7 +27,7 @@
 #include "lauxlib.h"
 #include "lualib.h"
 
-#define VX_BUILD 102
+#define VX_BUILD 103
 #define VX_STAGE 0
 #define VX_BOOT 3
 #define VX_HOOKSET 0
@@ -193,8 +195,8 @@ static void vxCall(void *fn, void *a1) {
 }
 
 static int vxProtOf(void *p) {
-    vm_address_t a = (vm_address_t)p & ~(vm_address_t)(VX_PG - 1);
-    vm_size_t sz = 0;
+    mach_vm_address_t a = (mach_vm_address_t)p & ~(mach_vm_address_t)(VX_PG - 1);
+    mach_vm_size_t sz = 0;
     vm_region_basic_info_data_64_t info;
     mach_port_t obj = MACH_PORT_NULL;
     mach_msg_type_number_t cnt = VM_REGION_BASIC_INFO_COUNT_64;
