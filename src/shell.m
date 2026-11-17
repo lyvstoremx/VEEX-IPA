@@ -1,4 +1,4 @@
-// src/shell.m — VEEX build 105
+// src/shell.m — VEEX build 106
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
@@ -31,7 +31,7 @@ extern kern_return_t vm_region_64(vm_map_t target_task, vm_address_t *address,
                                   vm_region_info_t info, mach_msg_type_number_t *infoCnt,
                                   mach_port_t *object_name);
 
-#define VX_BUILD 105
+#define VX_BUILD 106
 #define VX_STAGE 0
 #define VX_BOOT 3
 #define VX_HOOKSET 0
@@ -209,6 +209,27 @@ static int vxProtOf(void *p) {
     return (int)info.protection;
 }
 
+static void vxEnvProbe(void) {
+    void *sec = dlopen("/System/Library/Frameworks/Security.framework/Security", RTLD_NOW);
+    if (!sec) { vxRaw("=== sec nulo ==="); return; }
+    void *(*mk)(void *) = (void *(*)(void *))dlsym(sec, "SecTaskCreateFromSelf");
+    CFTypeRef (*get)(void *, CFStringRef, void **) =
+        (CFTypeRef (*)(void *, CFStringRef, void **))dlsym(sec, "SecTaskCopyValueForEntitlement");
+    if (!mk || !get) { vxRaw("=== syms nulas ==="); return; }
+    void *t = mk(NULL);
+    if (!t) { vxRaw("=== task nula ==="); return; }
+    const char *ks[] = { "get-task-allow", "com.apple.security.cs.allow-jit",
+                         "com.apple.security.cs.disable-library-validation" };
+    for (int i = 0; i < 3; i++) {
+        CFStringRef k = CFStringCreateWithCString(NULL, ks[i], kCFStringEncodingUTF8);
+        CFTypeRef v = get(t, k, NULL);
+        vxRaw("=== ent %s = %s ===", ks[i], v ? [(__bridge id)v description].UTF8String : "(nil)");
+        if (v) CFRelease(v);
+        CFRelease(k);
+    }
+    CFRelease(t);
+}
+
 static int vxTrampPrep(uint8_t **out) {
     if (gTrN >= VX_TR_MAX) return -9;
     uint8_t *tr = NULL;
@@ -252,9 +273,11 @@ static int vxTrampExec(uint8_t *tr) {
     if (via == 2) { if (p_jitwp) p_jitwp(1); return 0; }
     uint64_t pg = (uint64_t)tr & ~(VX_PG - 1);
     int r = mprotect((void *)pg, VX_PG, PROT_READ | PROT_EXEC);
+    vxLog(@"[VEEX] mpr=%d p1=%x", r, vxProtOf(tr));
     if (r != 0 || !(vxProtOf(tr) & VM_PROT_EXECUTE)) {
-        vm_protect(mach_task_self(), pg, VX_PG, false,
-                   VM_PROT_READ | VM_PROT_EXECUTE | VM_PROT_COPY);
+        int v = vm_protect(mach_task_self(), pg, VX_PG, false,
+                           VM_PROT_READ | VM_PROT_EXECUTE | VM_PROT_COPY);
+        vxLog(@"[VEEX] vpr=%d p2=%x", v, vxProtOf(tr));
         vxFlush(tr, VX_SLOT);
     }
     return 0;
@@ -1322,6 +1345,7 @@ __attribute__((naked)) static void h_harvest(void) {
 
 static int l_testret(lua_State *L) {
     uint8_t *tr = NULL;
+    vxLog(@"[VEEX] ref=%x", vxProtOf((void *)h_harvest_c));
     int pr = vxTrampPrep(&tr);
     vxLog(@"[VEEX] rprep=%d", pr);
     if (pr != 0) { lua_pushinteger(L, pr); return 1; }
@@ -1695,6 +1719,7 @@ __attribute__((constructor)) static void vxInit(void) {
     if (!p_icache) p_icache = (void (*)(void *, size_t))dlsym(RTLD_DEFAULT, "sys_icache_invalidate");
     if (!p_jitwp) p_jitwp = (int (*)(int))dlsym(RTLD_DEFAULT, "pthread_jit_write_protect_np");
     vxRaw("=== icache=%p jitwp=%p ===", p_icache, p_jitwp);
+    vxEnvProbe();
     if (!gLog) gLog = [NSMutableString new];
     gDocs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
     vxLog(@"[VEEX] build %d boot=%d stage=%d", VX_BUILD, VX_BOOT, VX_STAGE);
