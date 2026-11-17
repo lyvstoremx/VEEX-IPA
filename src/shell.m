@@ -1,4 +1,4 @@
-// src/shell.m — VEEX build 89
+// src/shell.m — VEEX build 90
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
@@ -25,7 +25,7 @@
 #include "lauxlib.h"
 #include "lualib.h"
 
-#define VX_BUILD 89
+#define VX_BUILD 90
 #define VX_STAGE 0
 #define VX_BOOT 3
 #define VX_HOOKSET 0
@@ -157,6 +157,7 @@ static int vxTrampAny(void) {
         return -8;
     }
     gTrampPage = (uint8_t *)a;
+    vxLog(@"[VEEX] tramp=%p", gTrampPage);
     return 0;
 }
 
@@ -187,6 +188,7 @@ static int vxInlineHook(void *target, void *rep, void **origOut) {
     }
 
     uint32_t *t = (uint32_t *)target;
+    vxLog(@"[VEEX] w %08x %08x %08x %08x", t[0], t[1], t[2], t[3]);
     for (int i = 0; i < 4; i++) if (vxBadInstr(t[i])) return -2 - i;
 
     int r = vxTrampAny();
@@ -210,10 +212,12 @@ static int vxInlineHook(void *target, void *rep, void **origOut) {
     patch[0] = 0x58000050;
     patch[1] = 0xD61F0200;
     memcpy(patch + 2, &stb, 8);
+
+    *origOut = tr;
     memcpy(t, patch, 16);
 
-    if (p_icache) { p_icache(t, 16); p_icache(tr, 64); }
-    *origOut = tr;
+    vxLog(@"[VEEX] icache=%p", p_icache);
+    if (p_icache) { p_icache(tr, 64); p_icache(t, 16); }
     return 0;
 }
 
@@ -1134,23 +1138,28 @@ __attribute__((used, noinline)) static void h_harvest_c(void *self) {
 
 __attribute__((naked)) static void h_harvest(void) {
     __asm__ volatile(
-        "sub sp, sp, #96\n"
+        "sub sp, sp, #112\n"
         "stp x0, x1, [sp, #0]\n"
         "stp x2, x3, [sp, #16]\n"
         "stp x4, x5, [sp, #32]\n"
         "stp x6, x7, [sp, #48]\n"
-        "str x8, [sp, #64]\n"
+        "stp x29, x30, [sp, #64]\n"
+        "str x8, [sp, #80]\n"
         "ldr x0, [sp, #0]\n"
         "bl _h_harvest_c\n"
         "ldp x0, x1, [sp, #0]\n"
         "ldp x2, x3, [sp, #16]\n"
         "ldp x4, x5, [sp, #32]\n"
         "ldp x6, x7, [sp, #48]\n"
-        "ldr x8, [sp, #64]\n"
-        "add sp, sp, #96\n"
+        "ldp x29, x30, [sp, #64]\n"
+        "ldr x8, [sp, #80]\n"
+        "add sp, sp, #112\n"
         "adrp x9, _gOrig1@PAGE\n"
         "ldr x9, [x9, _gOrig1@PAGEOFF]\n"
+        "cbz x9, 1f\n"
         "br x9\n"
+        "1:\n"
+        "ret\n"
     );
 }
 
