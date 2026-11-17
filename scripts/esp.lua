@@ -20,7 +20,7 @@ function tick()
     beat = os.time()
     t0 = os.time()
     log("hook=" .. hook1(m))
-    log("PROBE15 VIVO")
+    log("PROBE16 VIVO")
     return
   end
 
