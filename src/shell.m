@@ -1,4 +1,4 @@
-// src/shell.m — VEEX build 79
+// src/shell.m — VEEX build 80
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
@@ -25,7 +25,7 @@
 #include "lauxlib.h"
 #include "lualib.h"
 
-#define VX_BUILD 79
+#define VX_BUILD 80
 #define VX_STAGE 0
 #define VX_BOOT 3
 #define VX_HOOKSET 0
@@ -1013,8 +1013,9 @@ static void vxFieldSyms(void) {
 static int vxFieldKeep(const char *t) {
     if (!t) return 0;
     const char *k[] = { "Vector3", "Vector2", "Transform", "Single", "Int32",
-                        "Boolean", "String", "UInt32", "Int16", "UInt16", "Int64" };
-    for (int i = 0; i < 11; i++) if (strstr(t, k[i])) return 1;
+                        "Boolean", "String", "UInt32", "Int16", "UInt16", "Int64",
+                        "List`1", "Dictionary", "HashSet", "Player", "ITransformNode" };
+    for (int i = 0; i < 16; i++) if (strstr(t, k[i])) return 1;
     return 0;
 }
 
