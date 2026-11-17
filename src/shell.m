@@ -1,4 +1,4 @@
-// src/shell.m — VEEX build 86
+// src/shell.m — VEEX build 87
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
@@ -25,7 +25,7 @@
 #include "lauxlib.h"
 #include "lualib.h"
 
-#define VX_BUILD 86
+#define VX_BUILD 87
 #define VX_STAGE 0
 #define VX_BOOT 3
 #define VX_HOOKSET 0
@@ -948,47 +948,65 @@ static int l_w2s(lua_State *L) {
 
 static void vxStopScript(void) { gRun = 0; }
 
+static void vxWipe(void) {
+    vxLog(@"[VEEX] WIPE inicio");
+    NSString *bid = [[NSBundle mainBundle] bundleIdentifier];
+    vxLog(@"[VEEX] bundle=%@", bid ?: @"nil");
+    vxLog(@"[VEEX] idfv=%@", [[[UIDevice currentDevice] identifierForVendor] UUIDString] ?: @"nil");
+
+    NSArray *doms = @[ bid ?: @"", @"com.dts.freefireth", @"app.badger6804.pineapple6732" ];
+    for (NSString *d in doms) {
+        if (!d.length) continue;
+        [[NSUserDefaults standardUserDefaults] removePersistentDomainForName:d];
+        vxLog(@"[PF] dominio borrado %@", d);
+    }
+    [[NSUserDefaults standardUserDefaults] synchronize];
+
+    NSString *prefDir = [[gDocs stringByDeletingLastPathComponent] stringByAppendingPathComponent:@"Library/Preferences"];
+    int pfn = 0;
+    for (NSString *f in [[NSFileManager defaultManager] contentsOfDirectoryAtPath:prefDir error:NULL]) {
+        if (![f.pathExtension isEqualToString:@"plist"]) continue;
+        if ([[NSFileManager defaultManager] removeItemAtPath:[prefDir stringByAppendingPathComponent:f] error:NULL]) {
+            pfn++; vxLog(@"[PF] %@", f);
+        }
+    }
+    vxLog(@"[VEEX] prefs borradas=%d", pfn);
+
+    NSArray *classes = @[ (__bridge id)kSecClassGenericPassword,
+                          (__bridge id)kSecClassInternetPassword,
+                          (__bridge id)kSecClassKey ];
+    int kcn = 0, kcf = 0;
+    for (int ci = 0; ci < 3; ci++) {
+        id cls = classes[ci];
+        NSDictionary *q = @{ (__bridge id)kSecClass: cls,
+                             (__bridge id)kSecReturnAttributes: @YES,
+                             (__bridge id)kSecMatchLimit: (__bridge id)kSecMatchLimitAll };
+        CFTypeRef res = NULL;
+        OSStatus st = SecItemCopyMatching((__bridge CFDictionaryRef)q, &res);
+        vxLog(@"[KC] clase=%d lectura=%d", ci, (int)st);
+        if (st == errSecSuccess && res) {
+            NSArray *arr = (__bridge_transfer NSArray *)res;
+            for (NSDictionary *d in arr) {
+                if (kcn++ > 80) break;
+                vxLog(@"[KC] %@ | %@", [d[(__bridge id)kSecAttrService] description] ?: @"-",
+                                      [d[(__bridge id)kSecAttrAccount] description] ?: @"-");
+            }
+            kcf += (int)arr.count;
+            NSMutableDictionary *dq = [NSMutableDictionary dictionary];
+            dq[(__bridge id)kSecClass] = cls;
+            OSStatus ds = SecItemDelete((__bridge CFDictionaryRef)dq);
+            vxLog(@"[KC] borrado clase=%d res=%d", ci, (int)ds);
+        }
+    }
+    vxLog(@"[VEEX] guest borrados=%d", kcf);
+    vxLog(@"[VEEX] WIPE fin");
+}
+
 static void vxResetGuest(void) {
-    vxLog(@"[VEEX] RESET GUEST...");
-    NSArray *pats = @[@"guest", @"freefire", @"garena", @"dts", @"badger6804"];
-    NSMutableArray *del = [NSMutableArray array];
-
-    NSDictionary *q = @{ (__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword,
-                         (__bridge id)kSecReturnAttributes: @YES,
-                         (__bridge id)kSecMatchLimit: (__bridge id)kSecMatchLimitAll };
-    CFTypeRef res = NULL;
-    OSStatus st = SecItemCopyMatching((__bridge CFDictionaryRef)q, &res);
-    vxLog(@"[VEEX] keychain lectura=%d", (int)st);
-    int kc = 0;
-    if (st == errSecSuccess && res) {
-        for (NSDictionary *d in (__bridge NSArray *)res) {
-            if (kc++ > 50) break;
-            vxLog(@"[KC] %@ | %@", [d[(__bridge id)kSecAttrService] description] ?: @"-",
-                                    [d[(__bridge id)kSecAttrAccount] description] ?: @"-");
-        }
-        for (NSDictionary *d in (__bridge NSArray *)res) {
-            NSString *svc = [d[(__bridge id)kSecAttrService] description] ?: @"";
-            NSString *acc = [d[(__bridge id)kSecAttrAccount] description] ?: @"";
-            NSString *all = [[svc stringByAppendingString:@"|"] stringByAppendingString:acc].lowercaseString;
-            for (NSString *p in pats) if ([all containsString:p]) { [del addObject:d]; break; }
-        }
-        CFRelease(res);
-    }
-    for (NSDictionary *d in del) {
-        NSMutableDictionary *dq = [NSMutableDictionary dictionary];
-        dq[(__bridge id)kSecClass] = (__bridge id)kSecClassGenericPassword;
-        if (d[(__bridge id)kSecAttrService]) dq[(__bridge id)kSecAttrService] = d[(__bridge id)kSecAttrService];
-        if (d[(__bridge id)kSecAttrAccount]) dq[(__bridge id)kSecAttrAccount] = d[(__bridge id)kSecAttrAccount];
-        SecItemDelete((__bridge CFDictionaryRef)dq);
-    }
-    if (del.count == 0) {
-        SecItemDelete((__bridge CFDictionaryRef)@{ (__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword });
-        vxLog(@"[VEEX] keychain: borrado total");
-    }
-    vxLog(@"[VEEX] guest borrados=%lu", (unsigned long)del.count);
-
-    vxLog(@"[VEEX] RESET hecho, cerrando en 2s");
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)),
+    vxLog(@"[VEEX] RESET armado");
+    [@"1" writeToFile:[gDocs stringByAppendingPathComponent:@"veex.reset"]
+           atomically:YES encoding:NSUTF8StringEncoding error:NULL];
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)),
                    dispatch_get_main_queue(), ^{ exit(0); });
 }
 
@@ -1456,6 +1474,15 @@ __attribute__((constructor)) static void vxInit(void) {
     gDocs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
     vxLog(@"[VEEX] build %d boot=%d stage=%d", VX_BUILD, VX_BOOT, VX_STAGE);
     vxRaw("=== constructor: docs=%@ ===", gDocs ?: @"nil");
+
+    NSString *flag = [gDocs stringByAppendingPathComponent:@"veex.reset"];
+    if ([[NSFileManager defaultManager] fileExistsAtPath:flag]) {
+        vxRaw("=== reset pendiente: wipe ===");
+        vxWipe();
+        [[NSFileManager defaultManager] removeItemAtPath:flag error:NULL];
+        vxRaw("=== wipe terminado ===");
+    }
+
     gMainHdr = (uint64_t)_dyld_get_image_header(0);
 #if VX_BOOT >= 1
     if (gMainHdr) {
