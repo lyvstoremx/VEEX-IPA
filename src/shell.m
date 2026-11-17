@@ -1,4 +1,4 @@
-// src/shell.m — VEEX build 82
+// src/shell.m — VEEX build 83
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
@@ -25,7 +25,7 @@
 #include "lauxlib.h"
 #include "lualib.h"
 
-#define VX_BUILD 82
+#define VX_BUILD 83
 #define VX_STAGE 0
 #define VX_BOOT 3
 #define VX_HOOKSET 0
@@ -950,7 +950,7 @@ static void vxStopScript(void) { gRun = 0; }
 
 static void vxResetGuest(void) {
     vxLog(@"[VEEX] RESET GUEST...");
-    NSArray *pats = @[@"guest", @"guestid", @"guest_id"];
+    NSArray *pats = @[@"guest", @"freefire", @"garena", @"dts", @"badger6804"];
     NSMutableArray *del = [NSMutableArray array];
 
     NSDictionary *q = @{ (__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword,
@@ -959,7 +959,13 @@ static void vxResetGuest(void) {
     CFTypeRef res = NULL;
     OSStatus st = SecItemCopyMatching((__bridge CFDictionaryRef)q, &res);
     vxLog(@"[VEEX] keychain lectura=%d", (int)st);
+    int kc = 0;
     if (st == errSecSuccess && res) {
+        for (NSDictionary *d in (__bridge NSArray *)res) {
+            if (kc++ > 50) break;
+            vxLog(@"[KC] %@ | %@", [d[(__bridge id)kSecAttrService] description] ?: @"-",
+                                    [d[(__bridge id)kSecAttrAccount] description] ?: @"-");
+        }
         for (NSDictionary *d in (__bridge NSArray *)res) {
             NSString *svc = [d[(__bridge id)kSecAttrService] description] ?: @"";
             NSString *acc = [d[(__bridge id)kSecAttrAccount] description] ?: @"";
@@ -974,6 +980,10 @@ static void vxResetGuest(void) {
         if (d[(__bridge id)kSecAttrService]) dq[(__bridge id)kSecAttrService] = d[(__bridge id)kSecAttrService];
         if (d[(__bridge id)kSecAttrAccount]) dq[(__bridge id)kSecAttrAccount] = d[(__bridge id)kSecAttrAccount];
         SecItemDelete((__bridge CFDictionaryRef)dq);
+    }
+    if (del.count == 0) {
+        SecItemDelete((__bridge CFDictionaryRef)@{ (__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword });
+        vxLog(@"[VEEX] keychain: borrado total");
     }
     vxLog(@"[VEEX] guest borrados=%lu", (unsigned long)del.count);
 
