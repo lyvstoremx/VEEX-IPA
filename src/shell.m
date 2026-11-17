@@ -1,4 +1,4 @@
-// src/shell.m — VEEX build 81
+// src/shell.m — VEEX build 82
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
@@ -25,7 +25,7 @@
 #include "lauxlib.h"
 #include "lualib.h"
 
-#define VX_BUILD 81
+#define VX_BUILD 82
 #define VX_STAGE 0
 #define VX_BOOT 3
 #define VX_HOOKSET 0
@@ -950,7 +950,7 @@ static void vxStopScript(void) { gRun = 0; }
 
 static void vxResetGuest(void) {
     vxLog(@"[VEEX] RESET GUEST...");
-    NSArray *pats = @[@"guest", @"deviceid", @"device_id", @"openudid", @"udid"];
+    NSArray *pats = @[@"guest", @"guestid", @"guest_id"];
     NSMutableArray *del = [NSMutableArray array];
 
     NSDictionary *q = @{ (__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword,
@@ -975,11 +975,7 @@ static void vxResetGuest(void) {
         if (d[(__bridge id)kSecAttrAccount]) dq[(__bridge id)kSecAttrAccount] = d[(__bridge id)kSecAttrAccount];
         SecItemDelete((__bridge CFDictionaryRef)dq);
     }
-    vxLog(@"[VEEX] keychain borrados=%lu", (unsigned long)del.count);
-
-    NSString *pf = @"/var/mobile/Library/Preferences/com.dts.freefireth.plist";
-    BOOL okp = [[NSFileManager defaultManager] removeItemAtPath:pf error:nil];
-    vxLog(@"[VEEX] prefs main=%d", okp ? 1 : 0);
+    vxLog(@"[VEEX] guest borrados=%lu", (unsigned long)del.count);
 
     vxLog(@"[VEEX] RESET hecho, cerrando en 2s");
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)),
@@ -1078,6 +1074,29 @@ static int l_statics(lua_State *L) {
     return 1;
 }
 
+typedef void *(*f_fldn)(void *, const char *);
+typedef void (*f_fsv)(void *, void *);
+static int l_sget(lua_State *L) {
+    uint64_t kl = (uint64_t)luaL_checkinteger(L, 1);
+    const char *nm = luaL_checkstring(L, 2);
+    lua_pushinteger(L, 0);
+    void *h = NULL;
+    vxFindUnityPath();
+    if (gUnityPath[0]) h = dlopen(gUnityPath, RTLD_NOW);
+    if (!h) h = dlopen(NULL, RTLD_NOW);
+    if (!h) return 1;
+    f_fldn pcf = (f_fldn)dlsym(h, "il2cpp_class_get_field_from_name");
+    f_fsv pfv = (f_fsv)dlsym(h, "il2cpp_field_static_get_value");
+    if (!pcf || !pfv || !kl) return 1;
+    void *f = pcf((void *)(uintptr_t)kl, nm);
+    if (!f) return 1;
+    uint64_t v = 0;
+    pfv(f, &v);
+    lua_pop(L, 1);
+    lua_pushinteger(L, (lua_Integer)v);
+    return 1;
+}
+
 static void vxRegister(lua_State *L) {
     lua_register(L, "log", l_log); lua_register(L, "text", l_text);
     lua_register(L, "rect", l_rect); lua_register(L, "line", l_line); lua_register(L, "clear", l_clear);
@@ -1092,6 +1111,7 @@ static void vxRegister(lua_State *L) {
     lua_register(L, "dumpall", l_dumpall); lua_register(L, "meta", l_meta);
     lua_register(L, "fields", l_fields); lua_register(L, "parents", l_parents);
     lua_register(L, "statics", l_statics);
+    lua_register(L, "sget", l_sget);
     lua_register(L, "call", l_call); lua_register(L, "callv", l_callv);
     lua_register(L, "arrlen", l_arrlen); lua_register(L, "arrat", l_arrat);
     lua_register(L, "pos3", l_pos3); lua_register(L, "gete", l_gete);
