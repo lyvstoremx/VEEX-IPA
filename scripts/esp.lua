@@ -2,6 +2,8 @@ local t0 = os.time()
 local done = false
 
 function tick()
+  if cfg("set.reset") == 1 then setcfg("set.reset", 0) reset() end
+  if cfg("set.reload") == 1 then setcfg("set.reload", 0) reload() end
   if done then return end
   if not i2c_ready() then
     if os.time() - t0 > 20 then done = true log("SIN IL2CPP") end
