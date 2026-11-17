@@ -8,6 +8,7 @@ function tick()
 
   if step == 0 then
     step = 1
+    log("ret=" .. testret())
     log("stub=" .. teststub())
     log("tramp=" .. testtramp())
     PLC = i2c_class("COW.GamePlay", "Player")
@@ -20,7 +21,7 @@ function tick()
     beat = os.time()
     t0 = os.time()
     log("hook=" .. hook1(m))
-    log("PROBE16 VIVO")
+    log("PROBE17 VIVO")
     return
   end
 
