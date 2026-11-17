@@ -1,4 +1,4 @@
-// src/shell.m — VEEX build 90
+// src/shell.m — VEEX build 91
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
@@ -25,7 +25,7 @@
 #include "lauxlib.h"
 #include "lualib.h"
 
-#define VX_BUILD 90
+#define VX_BUILD 91
 #define VX_STAGE 0
 #define VX_BOOT 3
 #define VX_HOOKSET 0
@@ -128,6 +128,7 @@ static void vxHex(const char *hex, unsigned char *out, int len) {
 #define VX_TRAMP_SLOTS 240
 #define VX_TRAMP_SZ    (VX_TRAMP_SLOTS * 64)
 
+static uint8_t gTrampBuf[VX_TRAMP_SZ] __attribute__((aligned(0x4000)));
 static uint8_t *gTrampPage = NULL;
 static int gTrampSlot = 0;
 static int gHooked = 0;
@@ -149,15 +150,11 @@ static void vxEmitAbs(uint32_t *w, uint64_t v) {
 
 static int vxTrampAny(void) {
     if (gTrampPage) return 0;
-    vm_address_t a = 0;
-    if (vm_allocate(mach_task_self(), &a, VX_TRAMP_SZ, VM_FLAGS_ANYWHERE) != KERN_SUCCESS) return -7;
-    if (vm_protect(mach_task_self(), a, VX_TRAMP_SZ, false,
-                   VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXECUTE) != KERN_SUCCESS) {
-        vm_deallocate(mach_task_self(), a, VX_TRAMP_SZ);
-        return -8;
-    }
-    gTrampPage = (uint8_t *)a;
-    vxLog(@"[VEEX] tramp=%p", gTrampPage);
+    kern_return_t k = vm_protect(mach_task_self(), (vm_address_t)gTrampBuf, VX_TRAMP_SZ, false,
+                                 VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXECUTE);
+    vxLog(@"[VEEX] tramp=%p prot=%d", gTrampBuf, (int)k);
+    if (k != KERN_SUCCESS) return -8;
+    gTrampPage = gTrampBuf;
     return 0;
 }
 
