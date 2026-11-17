@@ -1,4 +1,4 @@
-// src/shell.m — VEEX build 92
+// src/shell.m — VEEX build 93
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
@@ -25,7 +25,7 @@
 #include "lauxlib.h"
 #include "lualib.h"
 
-#define VX_BUILD 92
+#define VX_BUILD 93
 #define VX_STAGE 0
 #define VX_BOOT 3
 #define VX_HOOKSET 0
@@ -125,8 +125,9 @@ static void vxHex(const char *hex, unsigned char *out, int len) {
     for (int i = 0; i < len; i++) { unsigned v = 0; sscanf(hex + i * 2, "%2x", &v); out[i] = (unsigned char)v; }
 }
 
-#define VX_TRAMP_SLOTS 240
-#define VX_TRAMP_SZ    (VX_TRAMP_SLOTS * 64)
+#define VX_TRAMP_SLOTS 200
+#define VX_SLOT        128
+#define VX_TRAMP_SZ    (VX_TRAMP_SLOTS * VX_SLOT)
 
 static uint8_t gTrampBuf[VX_TRAMP_SZ] __attribute__((aligned(0x4000)));
 static uint8_t *gTrampPage = NULL;
@@ -134,18 +135,35 @@ static int gTrampSlot = 0;
 static int gHooked = 0;
 static void (*p_icache)(void *, size_t) = NULL;
 
-static void vxEmitFar(uint32_t *w, uint64_t v) {
-    w[0] = 0xD2800010 | (uint32_t)((v & 0xFFFF) << 5);
-    w[1] = 0xF2A00010 | (uint32_t)(((v >> 16) & 0xFFFF) << 5);
-    w[2] = 0xF2C00010 | (uint32_t)(((v >> 32) & 0xFFFF) << 5);
-    w[3] = 0xF2E00010 | (uint32_t)(((v >> 48) & 0xFFFF) << 5);
-    w[4] = 0xD61F0200;
-}
-
 static void vxEmitAbs(uint32_t *w, uint64_t v) {
     w[0] = 0x58000050;
     w[1] = 0xD61F0200;
     memcpy(w + 2, &v, 8);
+}
+
+static int vxEmitMovAbs(uint32_t *w, uint32_t rd, uint64_t v) {
+    w[0] = 0xD2800000u | (uint32_t)((v & 0xFFFF) << 5) | rd;
+    w[1] = 0xF2800000u | (1u << 21) | (uint32_t)(((v >> 16) & 0xFFFF) << 5) | rd;
+    w[2] = 0xF2800000u | (2u << 21) | (uint32_t)(((v >> 32) & 0xFFFF) << 5) | rd;
+    w[3] = 0xF2800000u | (3u << 21) | (uint32_t)(((v >> 48) & 0xFFFF) << 5) | rd;
+    return 4;
+}
+
+static int vxReloc(uint32_t in, uint64_t at, uint32_t *out) {
+    if ((in & 0x9F000000) == 0x10000000) {
+        uint32_t rd = in & 0x1F;
+        int64_t imm = (int64_t)((in >> 5) & 0x7FFFF);
+        if (imm & 0x40000) imm |= ~0x7FFFFLL;
+        return vxEmitMovAbs(out, rd, at + (uint64_t)imm);
+    }
+    if ((in & 0x9F000000) == 0x90000000) {
+        uint32_t rd = in & 0x1F;
+        int64_t imm = (int64_t)((in >> 5) & 0x7FFFF);
+        if (imm & 0x40000) imm |= ~0x7FFFFLL;
+        return vxEmitMovAbs(out, rd, (at & ~0xFFFULL) + ((uint64_t)imm << 12));
+    }
+    out[0] = in;
+    return 1;
 }
 
 static int vxTrampAny(void) {
@@ -159,7 +177,6 @@ static int vxTrampAny(void) {
 }
 
 static int vxBadInstr(uint32_t in) {
-    if ((in & 0x9F000000) == 0x90000000) return 1;
     if ((in & 0x7C000000) == 0x14000000) return 1;
     if ((in & 0xFC000000) == 0x94000000) return 1;
     if ((in & 0xFF000010) == 0x54000000) return 1;
@@ -191,11 +208,12 @@ static int vxInlineHook(void *target, void *rep, void **origOut) {
     int r = vxTrampAny();
     if (r) return r;
 
-    uint8_t *tr  = gTrampPage + (size_t)(gTrampSlot++) * 64;
-    uint8_t *stb = tr + 32;
+    uint8_t *tr  = gTrampPage + (size_t)(gTrampSlot++) * VX_SLOT;
+    uint8_t *stb = tr + 96;
 
-    memcpy(tr, t, 16);
-    vxEmitAbs((uint32_t *)(tr + 16), (uint64_t)target + 16);
+    uint32_t *w = (uint32_t *)tr;
+    for (int i = 0; i < 4; i++) w += vxReloc(t[i], (uint64_t)target + (uint64_t)i * 4, w);
+    vxEmitAbs(w, (uint64_t)target + 16);
     vxEmitAbs((uint32_t *)stb, (uint64_t)rep);
 
     uint64_t start = (uint64_t)target & ~(VX_PG - 1);
@@ -214,7 +232,7 @@ static int vxInlineHook(void *target, void *rep, void **origOut) {
     memcpy(t, patch, 16);
 
     vxLog(@"[VEEX] icache=%p", p_icache);
-    if (p_icache) { p_icache(tr, 64); p_icache(t, 16); }
+    if (p_icache) { p_icache(tr, VX_SLOT); p_icache(t, 16); }
     return 0;
 }
 
