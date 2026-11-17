@@ -1,4 +1,4 @@
-// src/shell.m — VEEX build 85
+// src/shell.m — VEEX build 86
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
@@ -25,7 +25,7 @@
 #include "lauxlib.h"
 #include "lualib.h"
 
-#define VX_BUILD 85
+#define VX_BUILD 86
 #define VX_STAGE 0
 #define VX_BOOT 3
 #define VX_HOOKSET 0
@@ -116,7 +116,7 @@ static void vxLog(NSString *fmt, ...) {
     dispatch_async(dispatch_get_main_queue(), ^{
         if (gLogView) {
             gLogView.text = gLog;
-            if (gLog.length) [gLogView scrollToVisible:NSMakeRange(gLog.length - 1, 1)];
+            if (gLog.length) [gLogView scrollRangeToVisible:NSMakeRange(gLog.length - 1, 1)];
         }
     });
 }
