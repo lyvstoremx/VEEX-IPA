@@ -1,4 +1,4 @@
-// src/shell.m — VEEX build 91
+// src/shell.m — VEEX build 92
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
@@ -25,7 +25,7 @@
 #include "lauxlib.h"
 #include "lualib.h"
 
-#define VX_BUILD 91
+#define VX_BUILD 92
 #define VX_STAGE 0
 #define VX_BOOT 3
 #define VX_HOOKSET 0
@@ -736,6 +736,23 @@ static int l_w32(lua_State *L) { *(uint32_t *)(uintptr_t)luaL_checkinteger(L,1) 
 static int l_rf(lua_State *L) { lua_pushnumber(L, *(float *)(uintptr_t)luaL_checkinteger(L,1)); return 1; }
 static int l_wf(lua_State *L) { *(float *)(uintptr_t)luaL_checkinteger(L,1) = (float)luaL_checknumber(L,2); return 0; }
 
+static int l_sym(lua_State *L) {
+    const char *n = luaL_checkstring(L, 1);
+    void *h = dlopen(NULL, RTLD_NOW);
+    void *p = h ? dlsym(h, n) : NULL;
+    if (p) lua_pushinteger(L, (lua_Integer)(uintptr_t)p); else lua_pushnil(L);
+    return 1;
+}
+
+static char gStrBuf[256];
+static int l_sptr(lua_State *L) {
+    const char *s = luaL_checkstring(L, 1);
+    strncpy(gStrBuf, s, 255);
+    gStrBuf[255] = 0;
+    lua_pushinteger(L, (lua_Integer)(uintptr_t)gStrBuf);
+    return 1;
+}
+
 static int l_reset(lua_State *L) { (void)L; dispatch_async(dispatch_get_main_queue(), ^{ vxResetGuest(); }); return 0; }
 static int l_reload(lua_State *L) {
     (void)L;
@@ -1188,6 +1205,7 @@ static void vxRegister(lua_State *L) {
     lua_register(L, "sw", l_sw); lua_register(L, "sh", l_sh);
     lua_register(L, "r32", l_r32); lua_register(L, "w32", l_w32);
     lua_register(L, "rf", l_rf); lua_register(L, "wf", l_wf);
+    lua_register(L, "sym", l_sym); lua_register(L, "sptr", l_sptr);
     lua_register(L, "cfg", l_cfg); lua_register(L, "setcfg", l_setcfg);
     lua_register(L, "reset", l_reset); lua_register(L, "reload", l_reload);
     lua_register(L, "i2c_ready", l_i2c_ready); lua_register(L, "i2c_class", l_i2c_class);
@@ -1326,7 +1344,7 @@ static void vxBuildTab(void) {
         addRow(@"Esqueleto", @"draw.skel", y);
     } else if (gTab == 3) {
         addRow(@"Contador FPS", @"misc.fps", y); y += 36;
-        addRow(@"Ocultar en lobby", @"misc.hide", y); y += 36;
+        addRow(@"Mantener oculto", @"misc.hide", y); y += 36;
         addRow(@"Anti-captura", @"misc.anti", y);
     } else if (gTab == 4) {
         addRow(@"RESET GUEST", @"set.reset", y); y += 36;
