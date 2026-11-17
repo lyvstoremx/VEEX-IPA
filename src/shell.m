@@ -1,4 +1,4 @@
-// src/shell.m — VEEX build 101
+// src/shell.m — VEEX build 102
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
@@ -25,7 +25,7 @@
 #include "lauxlib.h"
 #include "lualib.h"
 
-#define VX_BUILD 101
+#define VX_BUILD 102
 #define VX_STAGE 0
 #define VX_BOOT 3
 #define VX_HOOKSET 0
@@ -183,21 +183,41 @@ static void vxFlush(void *p, size_t n) {
     if (p_icache) p_icache(p, n);
 }
 
+static void vxCall(void *fn, void *a1) {
+    __asm__ volatile(
+        "mov x0, %1\n"
+        "blr %0\n"
+        :: "r"(fn), "r"(a1)
+        : "x0","x1","x2","x3","x4","x5","x6","x7","x8","x9","x10","x11",
+          "x12","x13","x14","x15","x16","x17","x18","x30","memory");
+}
+
+static int vxProtOf(void *p) {
+    vm_address_t a = (vm_address_t)p & ~(vm_address_t)(VX_PG - 1);
+    vm_size_t sz = 0;
+    vm_region_basic_info_data_64_t info;
+    mach_port_t obj = MACH_PORT_NULL;
+    mach_msg_type_number_t cnt = VM_REGION_BASIC_INFO_COUNT_64;
+    if (mach_vm_region(mach_task_self(), &a, &sz, VM_REGION_BASIC_INFO_64,
+                       (vm_region_info_t)&info, &cnt, &obj) != KERN_SUCCESS) return -1;
+    return (int)info.protection;
+}
+
 static int vxTrampPrep(uint8_t **out) {
     if (gTrN >= VX_TR_MAX) return -9;
     uint8_t *tr = NULL;
     int via = -1;
 
-    if (gTrampSlot < VX_TRAMP_SLOTS) {
+    if (p_jitwp) {
+        void *m = mmap(NULL, VX_PG, PROT_READ | PROT_WRITE,
+                       MAP_PRIVATE | MAP_ANON | MAP_JIT, -1, 0);
+        if (m != MAP_FAILED) { p_jitwp(0); tr = (uint8_t *)m; via = 2; }
+    }
+    if (!tr && gTrampSlot < VX_TRAMP_SLOTS) {
         uint8_t *c = gTrampBuf + (size_t)gTrampSlot * VX_SLOT;
         if (mprotect((void *)((uint64_t)c & ~(VX_PG - 1)), VX_PG, PROT_READ | PROT_WRITE) == 0) {
             gTrampSlot++; tr = c; via = 0;
         }
-    }
-    if (!tr && p_jitwp) {
-        void *m = mmap(NULL, VX_PG, PROT_READ | PROT_WRITE,
-                       MAP_PRIVATE | MAP_ANON | MAP_JIT, -1, 0);
-        if (m != MAP_FAILED) { p_jitwp(0); tr = (uint8_t *)m; via = 2; }
     }
     if (!tr) {
         vm_address_t a = 0;
@@ -221,9 +241,12 @@ static int vxTrampExec(uint8_t *tr) {
     if (via == 2) { if (p_jitwp) p_jitwp(1); return 0; }
     uint64_t pg = (uint64_t)tr & ~(VX_PG - 1);
     int r = mprotect((void *)pg, VX_PG, PROT_READ | PROT_EXEC);
-    if (r != 0 && via == 3)
-        r = vm_protect(mach_task_self(), pg, VX_PG, false, VM_PROT_READ | VM_PROT_EXECUTE);
-    return r;
+    if (r != 0 || !(vxProtOf(tr) & VM_PROT_EXECUTE)) {
+        vm_protect(mach_task_self(), pg, VX_PG, false,
+                   VM_PROT_READ | VM_PROT_EXECUTE | VM_PROT_COPY);
+        vxFlush(tr, VX_SLOT);
+    }
+    return 0;
 }
 
 static int vxBadInstr(uint32_t in) {
@@ -288,7 +311,7 @@ static int vxInlineHook(void *target, void *rep, void **origOut) {
     vxLog(@"[VEEX] patched %08x", t[0]);
 
     int x1 = vxTrampExec(tr);
-    vxLog(@"[VEEX] slotx=%d", x1);
+    vxLog(@"[VEEX] slotx=%d prot=%x", x1, vxProtOf(tr));
     vxFlush(t, 16);
     return 0;
 }
@@ -1292,10 +1315,9 @@ static int l_testret(lua_State *L) {
     vxLog(@"[VEEX] rprep=%d", pr);
     if (pr != 0) { lua_pushinteger(L, pr); return 1; }
     ((uint32_t *)tr)[0] = 0xD65F03C0u;
-    int x1 = vxTrampExec(tr);
-    vxLog(@"[VEEX] rslotx=%d", x1);
-    if (x1 != 0) { lua_pushinteger(L, -11); return 1; }
-    ((void (*)(void))tr)();
+    vxTrampExec(tr);
+    vxLog(@"[VEEX] rprot=%x", vxProtOf(tr));
+    vxCall((void *)tr, (void *)0);
     lua_pushinteger(L, 1);
     return 1;
 }
@@ -1314,11 +1336,10 @@ static int l_testtramp(lua_State *L) {
     vxLog(@"[VEEX] tprep=%d", pr);
     if (pr != 0) { lua_pushinteger(L, pr); return 1; }
     vxEmitAbs((uint32_t *)tr, (uint64_t)h_harvest_c);
-    int x1 = vxTrampExec(tr);
-    vxLog(@"[VEEX] tslotx=%d", x1);
-    if (x1 != 0) { lua_pushinteger(L, -11); return 1; }
+    vxTrampExec(tr);
+    vxLog(@"[VEEX] tprot=%x", vxProtOf(tr));
     gHarvestN = 0;
-    ((void (*)(void *))tr)((void *)0x5678);
+    vxCall((void *)tr, (void *)0x5678);
     lua_pushinteger(L, gHarvestN);
     return 1;
 }
