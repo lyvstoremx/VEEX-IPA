@@ -1,4 +1,4 @@
-// src/shell.m — VEEX build 80
+// src/shell.m — VEEX build 81
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
@@ -25,7 +25,7 @@
 #include "lauxlib.h"
 #include "lualib.h"
 
-#define VX_BUILD 80
+#define VX_BUILD 81
 #define VX_STAGE 0
 #define VX_BOOT 3
 #define VX_HOOKSET 0
@@ -1054,6 +1054,30 @@ static int l_parents(lua_State *L) {
     return 1;
 }
 
+typedef uint32_t (*f_ffl)(void *);
+static int l_statics(lua_State *L) {
+    uint64_t kl = (uint64_t)luaL_checkinteger(L, 1);
+    lua_newtable(L);
+    void *h = NULL;
+    vxFindUnityPath();
+    if (gUnityPath[0]) h = dlopen(gUnityPath, RTLD_NOW);
+    if (!h) h = dlopen(NULL, RTLD_NOW);
+    if (!h) return 1;
+    f_ffl pfl = (f_ffl)dlsym(h, "il2cpp_field_get_flags");
+    vxFieldSyms();
+    if (!gI2C || !kl || !p_fl || !pfl) return 1;
+    void *it = NULL, *f; int k = 0; char b[220];
+    while ((f = p_fl((void *)(uintptr_t)kl, &it)) && k < 200) {
+        if (!(pfl(f) & 0x10)) continue;
+        const char *nm = p_fn ? p_fn(f) : NULL; if (!nm) continue;
+        const char *tn = (p_ft && p_tn) ? p_tn(p_ft(f)) : "";
+        snprintf(b, sizeof(b), "%s %s", tn ? tn : "?", nm);
+        lua_pushstring(L, b);
+        lua_rawseti(L, -2, ++k);
+    }
+    return 1;
+}
+
 static void vxRegister(lua_State *L) {
     lua_register(L, "log", l_log); lua_register(L, "text", l_text);
     lua_register(L, "rect", l_rect); lua_register(L, "line", l_line); lua_register(L, "clear", l_clear);
@@ -1067,6 +1091,7 @@ static void vxRegister(lua_State *L) {
     lua_register(L, "dump", l_dump); lua_register(L, "meths", l_meths);
     lua_register(L, "dumpall", l_dumpall); lua_register(L, "meta", l_meta);
     lua_register(L, "fields", l_fields); lua_register(L, "parents", l_parents);
+    lua_register(L, "statics", l_statics);
     lua_register(L, "call", l_call); lua_register(L, "callv", l_callv);
     lua_register(L, "arrlen", l_arrlen); lua_register(L, "arrat", l_arrat);
     lua_register(L, "pos3", l_pos3); lua_register(L, "gete", l_gete);
