@@ -1,4 +1,4 @@
-// src/shell.m — VEEX build 78
+// src/shell.m — VEEX build 79
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
@@ -25,7 +25,7 @@
 #include "lauxlib.h"
 #include "lualib.h"
 
-#define VX_BUILD 78
+#define VX_BUILD 79
 #define VX_STAGE 0
 #define VX_BOOT 3
 #define VX_HOOKSET 0
@@ -989,7 +989,11 @@ static void vxResetGuest(void) {
 typedef void *(*f_flds)(void *, void **);
 typedef const char *(*f_fname)(void *);
 typedef size_t (*f_foff)(void *);
+typedef void *(*f_ftype)(void *);
+typedef const char *(*f_tname)(void *);
+typedef void *(*f_parent)(void *);
 static f_flds p_fl; static f_fname p_fn; static f_foff p_fo;
+static f_ftype p_ft; static f_tname p_tn; static f_parent p_par;
 
 static void vxFieldSyms(void) {
     if (p_fl) return;
@@ -1001,6 +1005,17 @@ static void vxFieldSyms(void) {
     p_fl = (f_flds)dlsym(h, "il2cpp_class_get_fields");
     p_fn = (f_fname)dlsym(h, "il2cpp_field_get_name");
     p_fo = (f_foff)dlsym(h, "il2cpp_field_get_offset");
+    p_ft = (f_ftype)dlsym(h, "il2cpp_field_get_type");
+    p_tn = (f_tname)dlsym(h, "il2cpp_type_get_name");
+    p_par = (f_parent)dlsym(h, "il2cpp_class_get_parent");
+}
+
+static int vxFieldKeep(const char *t) {
+    if (!t) return 0;
+    const char *k[] = { "Vector3", "Vector2", "Transform", "Single", "Int32",
+                        "Boolean", "String", "UInt32", "Int16", "UInt16", "Int64" };
+    for (int i = 0; i < 11; i++) if (strstr(t, k[i])) return 1;
+    return 0;
 }
 
 static int l_fields(lua_State *L) {
@@ -1008,10 +1023,30 @@ static int l_fields(lua_State *L) {
     lua_newtable(L);
     vxFieldSyms();
     if (!gI2C || !kl || !p_fl) return 1;
-    void *it = NULL, *f; int k = 0; char b[160];
-    while ((f = p_fl((void *)(uintptr_t)kl, &it)) && k < 400) {
+    void *it = NULL, *f; int k = 0; char b[220];
+    while ((f = p_fl((void *)(uintptr_t)kl, &it)) && k < 260) {
         const char *nm = p_fn ? p_fn(f) : NULL; if (!nm) continue;
-        snprintf(b, sizeof(b), "0x%zx %s", p_fo ? p_fo(f) : 0, nm);
+        const char *tn = (p_ft && p_tn) ? p_tn(p_ft(f)) : "";
+        if (!vxFieldKeep(tn)) continue;
+        snprintf(b, sizeof(b), "0x%zx %s %s", p_fo ? p_fo(f) : 0, tn ? tn : "?", nm);
+        lua_pushstring(L, b);
+        lua_rawseti(L, -2, ++k);
+    }
+    return 1;
+}
+
+static int l_parents(lua_State *L) {
+    uint64_t kl = (uint64_t)luaL_checkinteger(L, 1);
+    lua_newtable(L);
+    vxFieldSyms();
+    if (!p_par || !kl) return 1;
+    int k = 0;
+    void *c = (void *)(uintptr_t)kl;
+    while ((c = p_par(c)) && k < 12) {
+        const char *ns = p_cns ? p_cns(c) : "";
+        const char *nm = p_cn ? p_cn(c) : "";
+        char b[220];
+        snprintf(b, sizeof(b), "%s::%s", (ns && *ns) ? ns : "-", nm ? nm : "?");
         lua_pushstring(L, b);
         lua_rawseti(L, -2, ++k);
     }
@@ -1030,7 +1065,7 @@ static void vxRegister(lua_State *L) {
     lua_register(L, "i2c_mptr", l_i2c_mptr); lua_register(L, "kl", l_kl);
     lua_register(L, "dump", l_dump); lua_register(L, "meths", l_meths);
     lua_register(L, "dumpall", l_dumpall); lua_register(L, "meta", l_meta);
-    lua_register(L, "fields", l_fields);
+    lua_register(L, "fields", l_fields); lua_register(L, "parents", l_parents);
     lua_register(L, "call", l_call); lua_register(L, "callv", l_callv);
     lua_register(L, "arrlen", l_arrlen); lua_register(L, "arrat", l_arrat);
     lua_register(L, "pos3", l_pos3); lua_register(L, "gete", l_gete);
