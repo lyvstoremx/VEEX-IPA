@@ -1,4 +1,4 @@
-// src/shell.m — VEEX build 97
+// src/shell.m — VEEX build 98
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
@@ -25,7 +25,7 @@
 #include "lauxlib.h"
 #include "lualib.h"
 
-#define VX_BUILD 97
+#define VX_BUILD 98
 #define VX_STAGE 0
 #define VX_BOOT 3
 #define VX_HOOKSET 0
@@ -603,14 +603,29 @@ static void vxFindUnityPath(void) {
     }
 }
 
+static void *gUniHandle = NULL;
+
+static void *vxSym(const char *n) {
+    if (gUniHandle) { void *p = dlsym(gUniHandle, n); if (p) return p; }
+    void *p = dlsym(RTLD_DEFAULT, n);
+    if (p) return p;
+    void *m = dlopen(NULL, RTLD_NOW);
+    return m ? dlsym(m, n) : NULL;
+}
+
 static void vxLoadIL2CPP(void) {
     if (gI2C) return;
-    void *h = NULL;
-    vxFindUnityPath();
-    if (gUnityPath[0]) h = dlopen(gUnityPath, RTLD_NOW);
-    if (!h) h = dlopen(NULL, RTLD_NOW);
-    if (!h) { vxLog(@"[VEEX] il2cpp sin handle"); return; }
-#define R(n, v) v = (void *)dlsym(h, n)
+    if (!gUniHandle) {
+        vxFindUnityPath();
+        vxLog(@"[VEEX] upath=%@", gUnityPath[0] ? @(gUnityPath) : @"(vacio)");
+        if (gUnityPath[0]) {
+            gUniHandle = dlopen(gUnityPath, RTLD_NOW | RTLD_GLOBAL);
+            if (!gUniHandle) vxLog(@"[VEEX] dlerr=%s", dlerror() ?: "?");
+        }
+        vxLog(@"[VEEX] uhandle=%p", gUniHandle);
+    }
+    int got = 0;
+#define R(n, v) do { v = (void *)vxSym(n); if (v) got++; } while (0)
     R("il2cpp_domain_get", p_dom);
     R("il2cpp_thread_attach", p_att);
     R("il2cpp_domain_get_assemblies", p_asms);
@@ -626,7 +641,7 @@ static void vxLoadIL2CPP(void) {
 #undef R
     gI2C = p_dom && p_asms && p_img && p_cc && p_ci && p_cn && p_mf && p_kl;
     if (gI2C) vxLog(@"[VEEX] il2cpp OK (resuelto)");
-    else vxLog(@"[VEEX] il2cpp FALLO");
+    else vxLog(@"[VEEX] il2cpp %d/12", got);
 }
 
 typedef struct { int t; float x, y, w, h; float r, g, b, a; char s[72]; } vxCmd;
@@ -1309,7 +1324,7 @@ static void *vxRunThread(void *arg) {
     vxLog(@"[VEEX] R1 hilo vivo");
     [NSThread sleepForTimeInterval:1.2];
     vxLog(@"[VEEX] R2 esperando il2cpp");
-    for (int i = 0; i < 40 && !gI2C; i++) { vxLoadIL2CPP(); if (!gI2C) [NSThread sleepForTimeInterval:0.2]; }
+    for (int i = 0; i < 120 && !gI2C; i++) { vxLoadIL2CPP(); if (!gI2C) [NSThread sleepForTimeInterval:0.2]; }
     if (!gI2C) { vxLog(@"[VEEX] R3 ABORTO sin il2cpp"); return NULL; }
     if (!p_dom || !p_att) { vxLog(@"[VEEX] R4 ABORTO punteros NULL"); return NULL; }
 
@@ -1621,7 +1636,7 @@ __attribute__((constructor)) static void vxInit(void) {
 #if VX_BOOT >= 2
             for (int i = 0; i < 60 && !gBase; i++) { vxFindImage(); if (!gBase) [NSThread sleepForTimeInterval:0.5]; }
             vxLog(@"[VEEX] base=%llx", gBase);
-            for (int i = 0; i < 40 && !gI2C; i++) { vxLoadIL2CPP(); if (!gI2C) [NSThread sleepForTimeInterval:0.5]; }
+            for (int i = 0; i < 240 && !gI2C; i++) { vxLoadIL2CPP(); if (!gI2C) [NSThread sleepForTimeInterval:0.5]; }
 #else
             vxLoadIL2CPP();
 #endif
