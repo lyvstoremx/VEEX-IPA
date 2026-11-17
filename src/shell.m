@@ -1,4 +1,4 @@
-// src/shell.m — VEEX build 93
+// src/shell.m — VEEX build 94
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
@@ -25,7 +25,7 @@
 #include "lauxlib.h"
 #include "lualib.h"
 
-#define VX_BUILD 93
+#define VX_BUILD 94
 #define VX_STAGE 0
 #define VX_BOOT 3
 #define VX_HOOKSET 0
@@ -129,7 +129,6 @@ static void vxHex(const char *hex, unsigned char *out, int len) {
 #define VX_SLOT        128
 #define VX_TRAMP_SZ    (VX_TRAMP_SLOTS * VX_SLOT)
 
-static uint8_t gTrampBuf[VX_TRAMP_SZ] __attribute__((aligned(0x4000)));
 static uint8_t *gTrampPage = NULL;
 static int gTrampSlot = 0;
 static int gHooked = 0;
@@ -168,11 +167,11 @@ static int vxReloc(uint32_t in, uint64_t at, uint32_t *out) {
 
 static int vxTrampAny(void) {
     if (gTrampPage) return 0;
-    kern_return_t k = vm_protect(mach_task_self(), (vm_address_t)gTrampBuf, VX_TRAMP_SZ, false,
-                                 VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXECUTE);
-    vxLog(@"[VEEX] tramp=%p prot=%d", gTrampBuf, (int)k);
-    if (k != KERN_SUCCESS) return -8;
-    gTrampPage = gTrampBuf;
+    void *p = mmap(NULL, VX_TRAMP_SZ, PROT_READ | PROT_WRITE | PROT_EXEC,
+                   MAP_PRIVATE | MAP_ANON, -1, 0);
+    if (p == MAP_FAILED) { vxLog(@"[VEEX] tramp mmap fallo"); return -7; }
+    gTrampPage = (uint8_t *)p;
+    vxLog(@"[VEEX] tramp=%p", gTrampPage);
     return 0;
 }
 
@@ -211,17 +210,24 @@ static int vxInlineHook(void *target, void *rep, void **origOut) {
     uint8_t *tr  = gTrampPage + (size_t)(gTrampSlot++) * VX_SLOT;
     uint8_t *stb = tr + 96;
 
+    vxLog(@"[VEEX] pre");
     uint32_t *w = (uint32_t *)tr;
     for (int i = 0; i < 4; i++) w += vxReloc(t[i], (uint64_t)target + (uint64_t)i * 4, w);
     vxEmitAbs(w, (uint64_t)target + 16);
     vxEmitAbs((uint32_t *)stb, (uint64_t)rep);
+    vxLog(@"[VEEX] rel");
 
     uint64_t start = (uint64_t)target & ~(VX_PG - 1);
     uint64_t endp = ((uint64_t)target + 16 + VX_PG - 1) & ~(VX_PG - 1);
     size_t span = (size_t)(endp - start);
     if (span < VX_PG) span = VX_PG;
-    if (vm_protect(mach_task_self(), start, span, false,
-                   VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY) != KERN_SUCCESS) return -10;
+    int mp = mprotect((void *)start, span, PROT_READ | PROT_WRITE | PROT_EXEC);
+    vxLog(@"[VEEX] mp=%d", mp);
+    if (mp != 0) {
+        if (vm_protect(mach_task_self(), start, span, false,
+                       VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY) != KERN_SUCCESS) return -10;
+        vxLog(@"[VEEX] vmp ok");
+    }
 
     uint32_t patch[4];
     patch[0] = 0x58000050;
@@ -230,6 +236,7 @@ static int vxInlineHook(void *target, void *rep, void **origOut) {
 
     *origOut = tr;
     memcpy(t, patch, 16);
+    vxLog(@"[VEEX] patched %08x", t[0]);
 
     vxLog(@"[VEEX] icache=%p", p_icache);
     if (p_icache) { p_icache(tr, VX_SLOT); p_icache(t, 16); }
