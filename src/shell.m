@@ -1,4 +1,4 @@
-// src/shell.m — VEEX build 98
+// src/shell.m — VEEX build 100
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
@@ -25,7 +25,7 @@
 #include "lauxlib.h"
 #include "lualib.h"
 
-#define VX_BUILD 98
+#define VX_BUILD 100
 #define VX_STAGE 0
 #define VX_BOOT 3
 #define VX_HOOKSET 0
@@ -582,11 +582,13 @@ typedef void *(*f_att)(void *);
 typedef const char *(*f_ns)(void *);
 typedef void *(*f_meths)(void *, void **);
 typedef const char *(*f_mname)(void *);
+typedef uint32_t (*f_pc)(void *);
 
 static f_v p_dom; static f_asms p_asms; static f_p1 p_img; static f_s1 p_cc;
 static f_i1 p_ci; static f_c1 p_cn; static f_mf p_mf;
 static f_att p_att; static f_p1 p_kl;
 static f_ns p_cns; static f_meths p_ml; static f_mname p_mn;
+static f_pc p_pc = NULL;
 static int gI2C = 0;
 
 static char gUnityPath[1024];
@@ -625,7 +627,9 @@ static void vxLoadIL2CPP(void) {
         vxLog(@"[VEEX] uhandle=%p", gUniHandle);
     }
     int got = 0;
-#define R(n, v) do { v = (void *)vxSym(n); if (v) got++; } while (0)
+    char miss[320]; miss[0] = 0;
+#define R(n, v) do { v = (void *)vxSym(n); if (v) got++; else { \
+    if (strlen(miss) < sizeof(miss) - 40) { strcat(miss, n); strcat(miss, " "); } } } while (0)
     R("il2cpp_domain_get", p_dom);
     R("il2cpp_thread_attach", p_att);
     R("il2cpp_domain_get_assemblies", p_asms);
@@ -638,10 +642,12 @@ static void vxLoadIL2CPP(void) {
     R("il2cpp_method_get_name", p_mn);
     R("il2cpp_class_get_method_from_field", p_mf);
     R("il2cpp_object_get_class", p_kl);
+    R("il2cpp_method_get_param_count", p_pc);
 #undef R
-    gI2C = p_dom && p_asms && p_img && p_cc && p_ci && p_cn && p_mf && p_kl;
-    if (gI2C) vxLog(@"[VEEX] il2cpp OK (resuelto)");
-    else vxLog(@"[VEEX] il2cpp %d/12", got);
+    int finder = (p_mf != NULL) || (p_ml && p_mn && p_pc);
+    gI2C = p_dom && p_asms && p_img && p_cc && p_ci && p_cn && p_kl && finder;
+    if (gI2C) vxLog(@"[VEEX] il2cpp OK (%d/13, finder=%d)", got, p_mf ? 1 : 2);
+    else vxLog(@"[VEEX] il2cpp %d/13 falta=[%@]", got, @(miss));
 }
 
 typedef struct { int t; float x, y, w, h; float r, g, b, a; char s[72]; } vxCmd;
@@ -860,12 +866,25 @@ static int l_i2c_class(lua_State *L) {
     return 1;
 }
 
+static void *vxMethodOf(void *kl, const char *name, int argc) {
+    if (p_mf) { void *m = p_mf(kl, name, argc); if (m) return m; }
+    if (!p_ml || !p_mn) return NULL;
+    void *it = NULL, *m;
+    while ((m = p_ml(kl, &it))) {
+        const char *nm = p_mn(m);
+        if (!nm || strcmp(nm, name)) continue;
+        if (p_pc && (int)p_pc(m) != argc) continue;
+        return m;
+    }
+    return NULL;
+}
+
 static int l_i2c_mptr(lua_State *L) {
     uint64_t kl = (uint64_t)luaL_checkinteger(L,1);
     const char *mth = luaL_checkstring(L,2);
     int argc = (int)luaL_optinteger(L,3,0);
     if (!gI2C || !kl) { lua_pushnil(L); return 1; }
-    void *m = p_mf((void *)(uintptr_t)kl, mth, argc);
+    void *m = vxMethodOf((void *)(uintptr_t)kl, mth, argc);
     if (m) lua_pushinteger(L, *(uint64_t *)m); else lua_pushnil(L);
     return 1;
 }
