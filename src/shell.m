@@ -1,4 +1,4 @@
-// src/shell.m — VEEX build 84
+// src/shell.m — VEEX build 85
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
@@ -25,7 +25,7 @@
 #include "lauxlib.h"
 #include "lualib.h"
 
-#define VX_BUILD 84
+#define VX_BUILD 85
 #define VX_STAGE 0
 #define VX_BOOT 3
 #define VX_HOOKSET 0
@@ -116,7 +116,7 @@ static void vxLog(NSString *fmt, ...) {
     dispatch_async(dispatch_get_main_queue(), ^{
         if (gLogView) {
             gLogView.text = gLog;
-            if (gLog.length) [gLogView scrollRangeToVisible:NSMakeRange(gLog.length - 1, 1)];
+            if (gLog.length) [gLogView scrollToVisible:NSMakeRange(gLog.length - 1, 1)];
         }
     });
 }
@@ -1107,6 +1107,42 @@ static int l_sget(lua_State *L) {
     return 1;
 }
 
+#define VX_HV 512
+static void *gHarvest[VX_HV];
+static volatile int gHarvestN = 0;
+static void *gOrig1 = NULL;
+
+static void h_harvest(void *self) {
+    if (self && gHarvestN < VX_HV) {
+        int dup = 0;
+        for (int i = 0; i < gHarvestN; i++) if (gHarvest[i] == self) { dup = 1; break; }
+        if (!dup) gHarvest[gHarvestN++] = self;
+    }
+    if (gOrig1) ((void (*)(void *))gOrig1)(self);
+}
+
+static int l_hook1(lua_State *L) {
+    uint64_t a = (uint64_t)luaL_checkinteger(L, 1);
+    gHarvestN = 0;
+    if (!a) { lua_pushinteger(L, -1); return 1; }
+    if (!p_icache) p_icache = (void (*)(void *, size_t))dlsym(RTLD_DEFAULT, "sys_icache_invalidate");
+    int r = vxInlineHook((void *)(uintptr_t)a, (void *)h_harvest, &gOrig1);
+    lua_pushinteger(L, r);
+    return 1;
+}
+static int l_hv_count(lua_State *L) { lua_pushinteger(L, gHarvestN); return 1; }
+static int l_hv_get(lua_State *L) {
+    int i = (int)luaL_checkinteger(L, 1);
+    lua_pushinteger(L, (i >= 0 && i < gHarvestN) ? (lua_Integer)(uintptr_t)gHarvest[i] : 0);
+    return 1;
+}
+static int l_hv_clear(lua_State *L) { (void)L; gHarvestN = 0; return 0; }
+static int l_r64(lua_State *L) {
+    uint64_t a = (uint64_t)luaL_checkinteger(L, 1);
+    lua_pushinteger(L, a ? *(uint64_t *)(uintptr_t)a : 0);
+    return 1;
+}
+
 static void vxRegister(lua_State *L) {
     lua_register(L, "log", l_log); lua_register(L, "text", l_text);
     lua_register(L, "rect", l_rect); lua_register(L, "line", l_line); lua_register(L, "clear", l_clear);
@@ -1122,6 +1158,9 @@ static void vxRegister(lua_State *L) {
     lua_register(L, "fields", l_fields); lua_register(L, "parents", l_parents);
     lua_register(L, "statics", l_statics);
     lua_register(L, "sget", l_sget);
+    lua_register(L, "hook1", l_hook1); lua_register(L, "hv_count", l_hv_count);
+    lua_register(L, "hv_get", l_hv_get); lua_register(L, "hv_clear", l_hv_clear);
+    lua_register(L, "r64", l_r64);
     lua_register(L, "call", l_call); lua_register(L, "callv", l_callv);
     lua_register(L, "arrlen", l_arrlen); lua_register(L, "arrat", l_arrat);
     lua_register(L, "pos3", l_pos3); lua_register(L, "gete", l_gete);
