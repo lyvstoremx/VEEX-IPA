@@ -1,4 +1,4 @@
-// src/shell.m — VEEX build 77
+// src/shell.m — VEEX build 78
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
@@ -25,7 +25,7 @@
 #include "lauxlib.h"
 #include "lualib.h"
 
-#define VX_BUILD 77
+#define VX_BUILD 78
 #define VX_STAGE 0
 #define VX_BOOT 3
 #define VX_HOOKSET 0
@@ -950,7 +950,7 @@ static void vxStopScript(void) { gRun = 0; }
 
 static void vxResetGuest(void) {
     vxLog(@"[VEEX] RESET GUEST...");
-    NSArray *pats = @[@"freefire", @"garena", @"dts", @"badger6804"];
+    NSArray *pats = @[@"guest", @"deviceid", @"device_id", @"openudid", @"udid"];
     NSMutableArray *del = [NSMutableArray array];
 
     NSDictionary *q = @{ (__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword,
@@ -976,33 +976,46 @@ static void vxResetGuest(void) {
         SecItemDelete((__bridge CFDictionaryRef)dq);
     }
     vxLog(@"[VEEX] keychain borrados=%lu", (unsigned long)del.count);
-    if (del.count == 0) {
-        SecItemDelete((__bridge CFDictionaryRef)@{(__bridge id)kSecClass:(__bridge id)kSecClassGenericPassword});
-        vxLog(@"[VEEX] keychain: borrado total");
-    }
 
-    NSString *pref = @"/var/mobile/Library/Preferences";
-    NSArray *pf = [[NSFileManager defaultManager] contentsOfDirectoryAtPath:pref error:nil];
-    if (!pf) { vxLog(@"[VEEX] prefs sin acceso"); }
-    else {
-        int np = 0;
-        for (NSString *f in pf) if ([f hasPrefix:@"com.dts."]) {
-            if ([[NSFileManager defaultManager] removeItemAtPath:[pref stringByAppendingPathComponent:f] error:nil]) np++;
-        }
-        vxLog(@"[VEEX] prefs borrados=%d", np);
-    }
-
-    NSArray *keep = @[@"veex.log", @"classes.txt", @"names.txt", @"esp.lua"];
-    NSArray *df = [[NSFileManager defaultManager] contentsOfDirectoryAtPath:gDocs error:nil];
-    int nd = 0;
-    for (NSString *f in df) if (![keep containsObject:f]) {
-        if ([[NSFileManager defaultManager] removeItemAtPath:[gDocs stringByAppendingPathComponent:f] error:nil]) nd++;
-    }
-    vxLog(@"[VEEX] documents borrados=%d", nd);
+    NSString *pf = @"/var/mobile/Library/Preferences/com.dts.freefireth.plist";
+    BOOL okp = [[NSFileManager defaultManager] removeItemAtPath:pf error:nil];
+    vxLog(@"[VEEX] prefs main=%d", okp ? 1 : 0);
 
     vxLog(@"[VEEX] RESET hecho, cerrando en 2s");
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)),
                    dispatch_get_main_queue(), ^{ exit(0); });
+}
+
+typedef void *(*f_flds)(void *, void **);
+typedef const char *(*f_fname)(void *);
+typedef size_t (*f_foff)(void *);
+static f_flds p_fl; static f_fname p_fn; static f_foff p_fo;
+
+static void vxFieldSyms(void) {
+    if (p_fl) return;
+    void *h = NULL;
+    vxFindUnityPath();
+    if (gUnityPath[0]) h = dlopen(gUnityPath, RTLD_NOW);
+    if (!h) h = dlopen(NULL, RTLD_NOW);
+    if (!h) return;
+    p_fl = (f_flds)dlsym(h, "il2cpp_class_get_fields");
+    p_fn = (f_fname)dlsym(h, "il2cpp_field_get_name");
+    p_fo = (f_foff)dlsym(h, "il2cpp_field_get_offset");
+}
+
+static int l_fields(lua_State *L) {
+    uint64_t kl = (uint64_t)luaL_checkinteger(L, 1);
+    lua_newtable(L);
+    vxFieldSyms();
+    if (!gI2C || !kl || !p_fl) return 1;
+    void *it = NULL, *f; int k = 0; char b[160];
+    while ((f = p_fl((void *)(uintptr_t)kl, &it)) && k < 400) {
+        const char *nm = p_fn ? p_fn(f) : NULL; if (!nm) continue;
+        snprintf(b, sizeof(b), "0x%zx %s", p_fo ? p_fo(f) : 0, nm);
+        lua_pushstring(L, b);
+        lua_rawseti(L, -2, ++k);
+    }
+    return 1;
 }
 
 static void vxRegister(lua_State *L) {
@@ -1017,6 +1030,7 @@ static void vxRegister(lua_State *L) {
     lua_register(L, "i2c_mptr", l_i2c_mptr); lua_register(L, "kl", l_kl);
     lua_register(L, "dump", l_dump); lua_register(L, "meths", l_meths);
     lua_register(L, "dumpall", l_dumpall); lua_register(L, "meta", l_meta);
+    lua_register(L, "fields", l_fields);
     lua_register(L, "call", l_call); lua_register(L, "callv", l_callv);
     lua_register(L, "arrlen", l_arrlen); lua_register(L, "arrat", l_arrat);
     lua_register(L, "pos3", l_pos3); lua_register(L, "gete", l_gete);
