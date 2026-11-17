@@ -1,5 +1,6 @@
 local t0 = os.time()
 local done = false
+local keys = {"Mgr","Manager","Network","Battle","Room","World","Entity"}
 
 function tick()
   if done then return end
@@ -9,17 +10,20 @@ function tick()
   end
   done = true
   local kl = i2c_class("COW.GamePlay", "Player")
-  if not kl then log("NO PLAYER") return end
-  local f = fields(kl)
-  log("cont="..#f)
-  for i = 1, math.min(#f, 80) do log("  "..f[i]) end
-  local t = dump("Manager", 4000)
-  local n = 0
-  for i = 1, #t do
-    if string.find(t[i].s, "COW.GamePlay") and n < 40 then
-      n = n + 1
-      log("M ["..t[i].s.."] "..t[i].n)
+  if kl then
+    local s = statics(kl)
+    log("statics="..#s)
+    for i = 1, math.min(#s, 120) do log("  "..s[i]) end
+  end
+  for _, k in ipairs(keys) do
+    local t = dump(k, 6000)
+    local n = 0
+    for i = 1, #t do
+      if string.find(t[i].s, "COW.GamePlay") and n < 18 then
+        n = n + 1
+        log("K "..k.." ["..t[i].s.."] "..t[i].n)
+      end
     end
   end
-  log("PROBE5 FIN")
+  log("PROBE6 FIN")
 end
