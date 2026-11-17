@@ -1,4 +1,4 @@
-// src/shell.m — VEEX build 95
+// src/shell.m — VEEX build 96
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
@@ -25,7 +25,7 @@
 #include "lauxlib.h"
 #include "lualib.h"
 
-#define VX_BUILD 95
+#define VX_BUILD 96
 #define VX_STAGE 0
 #define VX_BOOT 3
 #define VX_HOOKSET 0
@@ -125,11 +125,13 @@ static void vxHex(const char *hex, unsigned char *out, int len) {
     for (int i = 0; i < len; i++) { unsigned v = 0; sscanf(hex + i * 2, "%2x", &v); out[i] = (unsigned char)v; }
 }
 
-#define VX_TRAMP_SLOTS 200
+#define VX_TRAMP_SLOTS 120
 #define VX_SLOT        128
 #define VX_TRAMP_SZ    (VX_TRAMP_SLOTS * VX_SLOT)
 
-static uint8_t *gTrampPage = NULL;
+static uint8_t gTrampBuf[VX_TRAMP_SZ]
+    __attribute__((section("__TEXT,__vxtramp"), aligned(0x4000))) = {1};
+
 static int gTrampSlot = 0;
 static int gHooked = 0;
 static void (*p_icache)(void *, size_t) = NULL;
@@ -165,17 +167,14 @@ static int vxReloc(uint32_t in, uint64_t at, uint32_t *out) {
     return 1;
 }
 
-static int vxTrampAny(void) {
-    if (gTrampPage) return 0;
-    void *p = mmap(NULL, VX_TRAMP_SZ, PROT_READ | PROT_WRITE | PROT_EXEC,
-                   MAP_PRIVATE | MAP_ANON | MAP_JIT, -1, 0);
-    if (p == MAP_FAILED)
-        p = mmap(NULL, VX_TRAMP_SZ, PROT_READ | PROT_WRITE | PROT_EXEC,
-                 MAP_PRIVATE | MAP_ANON, -1, 0);
-    if (p == MAP_FAILED) { vxLog(@"[VEEX] tramp mmap fallo"); return -7; }
-    gTrampPage = (uint8_t *)p;
-    vxLog(@"[VEEX] tramp=%p", gTrampPage);
-    return 0;
+static int vxSlotW(uint8_t *tr) {
+    uint64_t pg = (uint64_t)tr & ~(VX_PG - 1);
+    return mprotect((void *)pg, VX_PG, PROT_READ | PROT_WRITE);
+}
+
+static int vxSlotX(uint8_t *tr) {
+    uint64_t pg = (uint64_t)tr & ~(VX_PG - 1);
+    return mprotect((void *)pg, VX_PG, PROT_READ | PROT_EXEC);
 }
 
 static int vxBadInstr(uint32_t in) {
@@ -207,18 +206,17 @@ static int vxInlineHook(void *target, void *rep, void **origOut) {
     vxLog(@"[VEEX] w %08x %08x %08x %08x", t[0], t[1], t[2], t[3]);
     for (int i = 0; i < 4; i++) if (vxBadInstr(t[i])) return -2 - i;
 
-    int r = vxTrampAny();
-    if (r) return r;
-
-    uint8_t *tr  = gTrampPage + (size_t)(gTrampSlot++) * VX_SLOT;
+    uint8_t *tr  = gTrampBuf + (size_t)(gTrampSlot++) * VX_SLOT;
     uint8_t *stb = tr + 96;
 
-    vxLog(@"[VEEX] pre");
+    int w1 = vxSlotW(tr);
+    vxLog(@"[VEEX] slotw=%d tr=%p", w1, tr);
+    if (w1 != 0) return -11;
+
     uint32_t *w = (uint32_t *)tr;
     for (int i = 0; i < 4; i++) w += vxReloc(t[i], (uint64_t)target + (uint64_t)i * 4, w);
     vxEmitAbs(w, (uint64_t)target + 16);
     vxEmitAbs((uint32_t *)stb, (uint64_t)rep);
-    vxLog(@"[VEEX] rel");
 
     uint64_t start = (uint64_t)target & ~(VX_PG - 1);
     uint64_t endp = ((uint64_t)target + 16 + VX_PG - 1) & ~(VX_PG - 1);
@@ -241,7 +239,8 @@ static int vxInlineHook(void *target, void *rep, void **origOut) {
     memcpy(t, patch, 16);
     vxLog(@"[VEEX] patched %08x", t[0]);
 
-    vxLog(@"[VEEX] icache=%p", p_icache);
+    int x1 = vxSlotX(tr);
+    vxLog(@"[VEEX] slotx=%d", x1);
     if (p_icache) { p_icache(tr, VX_SLOT); p_icache(t, 16); }
     return 0;
 }
@@ -594,7 +593,7 @@ static void vxLoadIL2CPP(void) {
     R("il2cpp_class_get_namespace", p_cns);
     R("il2cpp_class_get_methods", p_ml);
     R("il2cpp_method_get_name", p_mn);
-    R("il2cpp_class_get_method_from_name", p_mf);
+    R("il2cpp_class_get_method_from_field", p_mf);
     R("il2cpp_object_get_class", p_kl);
 #undef R
     gI2C = p_dom && p_asms && p_img && p_cc && p_ci && p_cn && p_mf && p_kl;
@@ -1214,10 +1213,14 @@ static int l_teststub(lua_State *L) {
 }
 
 static int l_testtramp(lua_State *L) {
-    int r = vxTrampAny();
-    if (r) { lua_pushinteger(L, r); return 1; }
-    uint8_t *tr = gTrampPage + (size_t)(gTrampSlot++) * VX_SLOT;
+    if (gTrampSlot >= VX_TRAMP_SLOTS) { lua_pushinteger(L, -9); return 1; }
+    uint8_t *tr = gTrampBuf + (size_t)(gTrampSlot++) * VX_SLOT;
+    int w1 = vxSlotW(tr);
+    vxLog(@"[VEEX] tslotw=%d tr=%p", w1, tr);
+    if (w1 != 0) { lua_pushinteger(L, -11); return 1; }
     vxEmitAbs((uint32_t *)tr, (uint64_t)h_harvest_c);
+    int x1 = vxSlotX(tr);
+    vxLog(@"[VEEX] tslotx=%d", x1);
     if (p_icache) p_icache(tr, VX_SLOT);
     gHarvestN = 0;
     ((void (*)(void *))tr)((void *)0x5678);
