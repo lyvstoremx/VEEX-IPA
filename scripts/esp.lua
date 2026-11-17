@@ -8,16 +8,25 @@ function tick()
     return
   end
   done = true
-  local kl = i2c_class("COW.GamePlay", "PlayerNetwork")
-  if not kl then log("NO PN") return end
-  local f = fields(kl)
-  log("campos="..#f)
-  for i = 1, math.min(#f, 100) do log("  "..f[i]) end
-  local s = statics(kl)
-  log("statics="..#s)
-  for i = 1, math.min(#s, 60) do log("  S "..s[i]) end
-  local m = meths(kl, 250)
-  log("metodos="..#m)
-  for i = 1, math.min(#m, 200) do log("  M "..m[i]) end
-  log("PROBE7 FIN")
+  local pn = i2c_class("COW.GamePlay", "PlayerNetwork")
+  if not pn then log("NO PN") return end
+  local lst = sget(pn, "OFINKLEDDFE")
+  log("lista="..string.format("%x", lst))
+  if lst == 0 then log("LISTA NULA, entra a partida") return end
+  local n = arrlen(lst)
+  log("n="..n)
+  for i = 0, math.min(n, 8) - 1 do
+    local e = arrat(lst, i)
+    local k = kl(e)
+    log(i.." e="..string.format("%x", e).." cls="..(k and string.format("%x", k) or "0"))
+  end
+  local jk = i2c_class("COW.GamePlay", "JDMOMODGGFK")
+  if jk then
+    local par = parents(jk)
+    for i = 1, #par do log("P "..par[i]) end
+    local f = fields(jk)
+    log("campos="..#f)
+    for i = 1, math.min(#f, 70) do log("  "..f[i]) end
+  end
+  log("PROBE9 FIN")
 end
