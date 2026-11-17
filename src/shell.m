@@ -1,4 +1,4 @@
-// src/shell.m — VEEX build 104
+// src/shell.m — VEEX build 105
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
@@ -31,7 +31,7 @@ extern kern_return_t vm_region_64(vm_map_t target_task, vm_address_t *address,
                                   vm_region_info_t info, mach_msg_type_number_t *infoCnt,
                                   mach_port_t *object_name);
 
-#define VX_BUILD 104
+#define VX_BUILD 105
 #define VX_STAGE 0
 #define VX_BOOT 3
 #define VX_HOOKSET 0
@@ -218,6 +218,11 @@ static int vxTrampPrep(uint8_t **out) {
         void *m = mmap(NULL, VX_PG, PROT_READ | PROT_WRITE,
                        MAP_PRIVATE | MAP_ANON | MAP_JIT, -1, 0);
         if (m != MAP_FAILED) { p_jitwp(0); tr = (uint8_t *)m; via = 2; }
+    }
+    if (!tr) {
+        void *m = mmap(NULL, VX_PG, PROT_READ | PROT_WRITE,
+                       MAP_PRIVATE | MAP_ANON, -1, 0);
+        if (m != MAP_FAILED) { tr = (uint8_t *)m; via = 4; }
     }
     if (!tr && gTrampSlot < VX_TRAMP_SLOTS) {
         uint8_t *c = gTrampBuf + (size_t)gTrampSlot * VX_SLOT;
