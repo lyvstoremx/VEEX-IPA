@@ -1,4 +1,4 @@
-// src/shell.m — VEEX build 87
+// src/shell.m — VEEX build 89
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
@@ -25,7 +25,7 @@
 #include "lauxlib.h"
 #include "lualib.h"
 
-#define VX_BUILD 87
+#define VX_BUILD 89
 #define VX_STAGE 0
 #define VX_BOOT 3
 #define VX_HOOKSET 0
@@ -141,24 +141,22 @@ static void vxEmitFar(uint32_t *w, uint64_t v) {
     w[4] = 0xD61F0200;
 }
 
-static int vxTrampNear(uint64_t target) {
+static void vxEmitAbs(uint32_t *w, uint64_t v) {
+    w[0] = 0x58000050;
+    w[1] = 0xD61F0200;
+    memcpy(w + 2, &v, 8);
+}
+
+static int vxTrampAny(void) {
     if (gTrampPage) return 0;
-    uint64_t base = target & ~0xFFFFULL;
-    for (int i = 1; i < 900; i++) {
-        uint64_t cand = (i & 1) ? (base + (uint64_t)(i / 2 + 1) * 0x10000ULL)
-                                : (base - (uint64_t)(i / 2 + 1) * 0x10000ULL);
-        vm_address_t a = (vm_address_t)cand;
-        if (vm_allocate(mach_task_self(), &a, VX_TRAMP_SZ, VM_FLAGS_FIXED) == KERN_SUCCESS) {
-            gTrampPage = (uint8_t *)a;
-            break;
-        }
-    }
-    if (!gTrampPage) return -7;
-    if (vm_protect(mach_task_self(), (vm_address_t)gTrampPage, VX_TRAMP_SZ, false,
+    vm_address_t a = 0;
+    if (vm_allocate(mach_task_self(), &a, VX_TRAMP_SZ, VM_FLAGS_ANYWHERE) != KERN_SUCCESS) return -7;
+    if (vm_protect(mach_task_self(), a, VX_TRAMP_SZ, false,
                    VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXECUTE) != KERN_SUCCESS) {
-        gTrampPage = NULL;
+        vm_deallocate(mach_task_self(), a, VX_TRAMP_SZ);
         return -8;
     }
+    gTrampPage = (uint8_t *)a;
     return 0;
 }
 
@@ -191,18 +189,15 @@ static int vxInlineHook(void *target, void *rep, void **origOut) {
     uint32_t *t = (uint32_t *)target;
     for (int i = 0; i < 4; i++) if (vxBadInstr(t[i])) return -2 - i;
 
-    int r = vxTrampNear((uint64_t)target);
+    int r = vxTrampAny();
     if (r) return r;
 
     uint8_t *tr  = gTrampPage + (size_t)(gTrampSlot++) * 64;
     uint8_t *stb = tr + 32;
 
     memcpy(tr, t, 16);
-    vxEmitFar((uint32_t *)(tr + 16), (uint64_t)target + 16);
-    vxEmitFar((uint32_t *)stb, (uint64_t)rep);
-
-    int64_t delta = (int64_t)(stb - (uint8_t *)target);
-    if (delta < -0x8000000LL || delta > 0x7FFFFFCLL) return -6;
+    vxEmitAbs((uint32_t *)(tr + 16), (uint64_t)target + 16);
+    vxEmitAbs((uint32_t *)stb, (uint64_t)rep);
 
     uint64_t start = (uint64_t)target & ~(VX_PG - 1);
     uint64_t endp = ((uint64_t)target + 16 + VX_PG - 1) & ~(VX_PG - 1);
@@ -212,10 +207,9 @@ static int vxInlineHook(void *target, void *rep, void **origOut) {
                    VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY) != KERN_SUCCESS) return -10;
 
     uint32_t patch[4];
-    patch[0] = 0x14000000 | (uint32_t)((delta >> 2) & 0x03FFFFFF);
-    patch[1] = 0xD503201F;
-    patch[2] = 0xD503201F;
-    patch[3] = 0xD503201F;
+    patch[0] = 0x58000050;
+    patch[1] = 0xD61F0200;
+    memcpy(patch + 2, &stb, 8);
     memcpy(t, patch, 16);
 
     if (p_icache) { p_icache(t, 16); p_icache(tr, 64); }
@@ -1130,13 +1124,34 @@ static void *gHarvest[VX_HV];
 static volatile int gHarvestN = 0;
 static void *gOrig1 = NULL;
 
-static void h_harvest(void *self) {
+__attribute__((used, noinline)) static void h_harvest_c(void *self) {
     if (self && gHarvestN < VX_HV) {
         int dup = 0;
         for (int i = 0; i < gHarvestN; i++) if (gHarvest[i] == self) { dup = 1; break; }
         if (!dup) gHarvest[gHarvestN++] = self;
     }
-    if (gOrig1) ((void (*)(void *))gOrig1)(self);
+}
+
+__attribute__((naked)) static void h_harvest(void) {
+    __asm__ volatile(
+        "sub sp, sp, #96\n"
+        "stp x0, x1, [sp, #0]\n"
+        "stp x2, x3, [sp, #16]\n"
+        "stp x4, x5, [sp, #32]\n"
+        "stp x6, x7, [sp, #48]\n"
+        "str x8, [sp, #64]\n"
+        "ldr x0, [sp, #0]\n"
+        "bl _h_harvest_c\n"
+        "ldp x0, x1, [sp, #0]\n"
+        "ldp x2, x3, [sp, #16]\n"
+        "ldp x4, x5, [sp, #32]\n"
+        "ldp x6, x7, [sp, #48]\n"
+        "ldr x8, [sp, #64]\n"
+        "add sp, sp, #96\n"
+        "adrp x9, _gOrig1@PAGE\n"
+        "ldr x9, [x9, _gOrig1@PAGEOFF]\n"
+        "br x9\n"
+    );
 }
 
 static int l_hook1(lua_State *L) {
