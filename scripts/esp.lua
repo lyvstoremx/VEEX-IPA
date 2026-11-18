@@ -8,20 +8,18 @@ function tick()
 
   if step == 0 then
     step = 1
-    log("ret=" .. testret())
-    log("stub=" .. teststub())
-    log("tramp=" .. testtramp())
     PLC = i2c_class("COW.GamePlay", "Player")
     log("pl=" .. (PLC and string.format("%x", PLC) or "nil"))
     if not PLC then step = 9 return end
     local m = i2c_mptr(PLC, "UpdateKinematics", 2)
-    if not m then log("SIN PUNTERO"); step = 9 return end
+    log("m=" .. (m and string.format("%x", m) or "nil"))
+    if not m then step = 9 return end
     hv_clear()
     last = 0
     beat = os.time()
     t0 = os.time()
-    log("hook=" .. hook1(m))
-    log("PROBE17 VIVO")
+    log("hookm=" .. hookm(PLC, "UpdateKinematics", 2))
+    log("PROBE18 VIVO")
     return
   end
 
