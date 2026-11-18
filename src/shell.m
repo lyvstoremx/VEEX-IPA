@@ -1,4 +1,4 @@
-// src/shell.m — VEEX build 123
+// src/shell.m — VEEX build 124
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
@@ -40,7 +40,7 @@ extern kern_return_t mach_vm_remap(vm_map_t target_task, uint64_t *address, uint
                                    uint64_t src_address, int copy, int *cur_protection,
                                    int *max_protection, int inheritance);
 
-#define VX_BUILD 123
+#define VX_BUILD 124
 #define VX_STAGE 0
 #define VX_BOOT 3
 #define VX_HOOKSET 4
@@ -572,19 +572,21 @@ static void vxHookName(const char *name, void *rep, void **origOut) {
     else vxLog(@"[VEEX] !%@ (%d)", @(name), r);
 }
 
-// Rebindeo por fishhook: no necesita memoria ejecutable.
+// Rebindeo por fishhook con traza de cada simbolo.
 static void vxHookSym(const char *name, void *rep, void **origOut) {
     char u[160];
     snprintf(u, sizeof(u), "_%s", name);
+    *origOut = NULL;
+    void *probe = dlsym(RTLD_DEFAULT, name);
+    if (!probe) { vxLog(@"[VEEX] s!%@ sin dlsym", @(name)); return; }
+    vxLog(@"[VEEX] s>%@ %p", @(name), probe);
     struct rebinding rb;
     rb.name = u;
     rb.replacement = rep;
     rb.replaced = origOut;
-    *origOut = NULL;
     int r = rebind_symbols(&rb, 1);
-    if (r == 0 && *origOut) { gHooked++; vxLog(@"[VEEX] f+%@", @(name)); return; }
-    vxLog(@"[VEEX] f!%@ r=%d", @(name), r);
-    vxHookName(name, rep, origOut);
+    vxLog(@"[VEEX] s<%@ r=%d old=%p", @(name), r, *origOut);
+    if (r == 0 && *origOut) gHooked++;
 }
 
 static unsigned char *(*o_md5)(const void *, CC_LONG, unsigned char *) = NULL;
@@ -695,21 +697,6 @@ static void vxInstallHooks(void) {
     vxHookSym("CC_MD5",    (void *)h_md5,    (void **)&o_md5);
     vxHookSym("CC_SHA1",   (void *)h_sha1,   (void **)&o_sha1);
     vxHookSym("CC_SHA256", (void *)h_sha256, (void **)&o_sha256);
-#endif
-#if VX_HOOKSET >= 2
-    if (!p_security) p_security = dlopen("/System/Library/Frameworks/Security.framework/Security", RTLD_NOW);
-    if (p_security) {
-        void *t1 = dlsym(p_security, "SecTaskCopyValueForEntitlement");
-        if (t1 && vxInlineHook(t1, (void *)h_stcve, (void **)&o_stcve) == 0) gHooked++;
-        void *t2 = dlsym(p_security, "SecStaticCodeCheckValidity");
-        if (t2 && vxInlineHook(t2, (void *)h_scv, NULL) == 0) gHooked++;
-        void *t3 = dlsym(p_security, "SecStaticCodeCheckValidityWithErrors");
-        if (t3 && vxInlineHook(t3, (void *)h_scvw, NULL) == 0) gHooked++;
-        void *t4 = dlsym(p_security, "SecCodeCheckValidity");
-        if (t4 && vxInlineHook(t4, (void *)h_scv, NULL) == 0) gHooked++;
-        void *t5 = dlsym(p_security, "SecCodeCheckValidityWithErrors");
-        if (t5 && vxInlineHook(t5, (void *)h_scvw, NULL) == 0) gHooked++;
-    }
 #endif
 #if VX_HOOKSET >= 3
     vxHookSym("_dyld_image_count",      (void *)h_dyld_image_count,     (void **)&o_dyld_image_count);
