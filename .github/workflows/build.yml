@@ -1,28 +1,37 @@
 name: build
 on:
   push:
-    branches: [main]
   workflow_dispatch:
-
 jobs:
   dylib:
-    runs-on: macos-14
+    runs-on: macos-15-intel
     steps:
       - uses: actions/checkout@v4
-      - name: sdk
-        run: echo "SDK=$(xcrun --sdk iphoneos --show-sdk-path)" >> $GITHUB_ENV
-      - name: compile
+      - name: lua
         run: |
-          xcrun --sdk iphoneos clang -arch arm64 -dynamiclib -O2 \
-            -isysroot "$SDK" -miphoneos-version-min=14.0 \
-            -framework UIKit -framework Foundation -framework CoreGraphics \
-            -I src -I lua \
-            src/shell.m src/fishhook.c lua/*.c \
-            -o VEEX.dylib
-      - name: sign
+          curl -L --retry 5 --retry-delay 3 -o lua.tgz https://github.com/lua/lua/archive/refs/tags/v5.4.7.tar.gz
+          ls -l lua.tgz
+          tar xzf lua.tgz
+          mv lua-5.4.7 lua-src
+          sed -i '' 's/^#define l_system(cmd).*/#define l_system(cmd) 0/' lua-src/loslib.c
+      - name: build
         run: |
-          ldid -S VEEX.dylib || codesign -s - -f VEEX.dylib
+          SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+          echo "SDK=$SDK"
+          mkdir -p out
+          SRC=$(ls lua-src/*.c | grep -v '/lua\.c' | grep -v '/luac\.c' | grep -v '/onelua\.c' || true)
+          clang -dynamiclib -target arm64-apple-ios14.0 -isysroot "$SDK" -fobjc-arc -fno-objc-relative-method-lists -O2 \
+            -Isrc -Ilua-src -install_name @rpath/libAudioEngine.dylib \
+            -framework Foundation -framework UIKit -framework CoreGraphics -framework QuartzCore -framework Security \
+            -o out/libAudioEngine.dylib src/shell.m src/fishhook.c $SRC 2> err.log || true
+          if [ -s err.log ]; then
+            grep -m 6 -E "error:" err.log | while IFS= read -r L; do echo "::error file=src/shell.m::$L"; done
+            echo "----- primeras lineas del compilador -----"
+            head -40 err.log
+          fi
+          test -f out/libAudioEngine.dylib || exit 1
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
-          name: VEEX
-          path: VEEX.dylib
+          name: libAudioEngine
+          path: out/
