@@ -1,4 +1,4 @@
-// src/shell.m — VEEX build 115
+// src/shell.m — VEEX build 116
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
@@ -39,7 +39,7 @@ extern kern_return_t mach_vm_remap(vm_map_t target_task, uint64_t *address, uint
                                    uint64_t src_address, int copy, int *cur_protection,
                                    int *max_protection, int inheritance);
 
-#define VX_BUILD 115
+#define VX_BUILD 116
 #define VX_STAGE 0
 #define VX_BOOT 3
 #define VX_HOOKSET 0
@@ -267,10 +267,17 @@ static void vxEnvProbe(void) {
 
 // Alias escribible + alias ejecutable del mismo offset de fichero.
 static int vxMapPair(const char *path, uint64_t off) {
+    struct stat st0;
+    int ch = chmod(path, 0644);
+    vxLog(@"[VEEX] pair chmod=%d e=%d", ch, errno);
+    if (stat(path, &st0) == 0) vxLog(@"[VEEX] pair modo=%o uid=%d", (unsigned)st0.st_mode & 0777, (int)st0.st_uid);
+
     int fd = open(path, O_RDWR);
     int canw = (fd >= 0);
+    int ew = errno;
     if (fd < 0) fd = open(path, O_RDONLY);
     if (fd < 0) { vxLog(@"[VEEX] pair open=%d e=%d", fd, errno); return -1; }
+    vxLog(@"[VEEX] pair canw=%d e=%d", canw, ew);
 
     uint64_t pa = off & ~(uint64_t)(VX_PG - 1);
     size_t delta = (size_t)(off - pa);
@@ -280,7 +287,7 @@ static int vxMapPair(const char *path, uint64_t off) {
     if (me == MAP_FAILED) { vxLog(@"[VEEX] pair x fallo e=%d", errno); close(fd); return -1; }
     uint8_t *bx = (uint8_t *)me + delta;
     int pe = vxProtOf(bx);
-    vxLog(@"[VEEX] pair x=%p pe=%x canw=%d", bx, pe, canw);
+    vxLog(@"[VEEX] pair x=%p pe=%x", bx, pe);
     if (!(pe & VM_PROT_EXECUTE)) { munmap(me, len); close(fd); return -1; }
 
     uint8_t *bw = NULL;
@@ -1964,7 +1971,7 @@ __attribute__((constructor)) static void vxInit(void) {
 
     NSString *bc = [gDocs stringByAppendingPathComponent:@"veex.boot"];
     int nb = [[NSString stringWithContentsOfFile:bc encoding:NSUTF8StringEncoding error:NULL] intValue] + 1;
-    [@(nb).stringValue writeToFile:bc atomically:YES encoding:NSUTF8StringEncoding error:NULL];
+    [@(nb).stringValue writeToFile:bc atomically:YES encoding:NSUTF8StringEncoding error:nil];
     vxRaw("=== F5 arranque #%d ===", nb);
 
     NSString *flag = [gDocs stringByAppendingPathComponent:@"veex.reset"];
