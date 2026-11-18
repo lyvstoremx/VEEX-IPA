@@ -1,4 +1,4 @@
-// src/shell.m — VEEX build 108
+// src/shell.m — VEEX build 109
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
@@ -31,7 +31,7 @@ extern kern_return_t vm_region_64(vm_map_t target_task, vm_address_t *address,
                                   vm_region_info_t info, mach_msg_type_number_t *infoCnt,
                                   mach_port_t *object_name);
 
-#define VX_BUILD 108
+#define VX_BUILD 109
 #define VX_STAGE 0
 #define VX_BOOT 3
 #define VX_HOOKSET 0
@@ -137,7 +137,7 @@ static void vxHex(const char *hex, unsigned char *out, int len) {
 #define VX_TRAMP_SZ    (VX_TRAMP_SLOTS * VX_SLOT)
 #define VX_CAVE_SZ     2048
 
-// Cueva ejecutable: seccion propia dentro de __TEXT del dylib. Nace R-X.
+// Cueva: seccion propia dentro de __TEXT del dylib (contenido firmado).
 __attribute__((used, section("__TEXT,__vxcave")))
 static const uint8_t gCavePad[VX_CAVE_SZ] = {0};
 
@@ -238,7 +238,7 @@ static void vxEnvProbe(void) {
     CFRelease(t);
 }
 
-// Cueva dentro de __TEXT: la pagina YA es ejecutable, solo hay que anadir W.
+// Cueva: se deja en RW para escribir; vxTrampExec la devuelve a RX.
 static uint8_t *vxCaveTake(void) {
     if (gCaveLeft < VX_SLOT) { vxLog(@"[VEEX] cave agotada"); return NULL; }
     uint8_t *c = gCave;
@@ -246,15 +246,16 @@ static uint8_t *vxCaveTake(void) {
     uint64_t en = ((uint64_t)c + VX_SLOT + VX_PG - 1) & ~(uint64_t)(VX_PG - 1);
     size_t span = (size_t)(en - pg);
 
-    int mp = mprotect((void *)pg, span, PROT_READ | PROT_WRITE | PROT_EXEC);
-    int pr = vxProtOf(c);
-    if (mp != 0 || !(pr & VM_PROT_EXECUTE)) {
-        vm_protect(mach_task_self(), pg, span, false,
-                   VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXECUTE | VM_PROT_COPY);
-        pr = vxProtOf(c);
+    int pre = vxProtOf(c);
+    int mp = mprotect((void *)pg, span, PROT_READ | PROT_WRITE);
+    int pw = vxProtOf(c);
+    if (mp != 0 || !(pw & VM_PROT_WRITE)) {
+        int v = vm_protect(mach_task_self(), pg, span, false, VM_PROT_READ | VM_PROT_WRITE);
+        pw = vxProtOf(c);
+        vxLog(@"[VEEX] cavev=%d pw=%x", v, pw);
     }
-    vxLog(@"[VEEX] cave=%p mp=%d cprot=%x", c, mp, pr);
-    if (!(pr & VM_PROT_EXECUTE)) return NULL;
+    vxLog(@"[VEEX] cave=%p pre=%x mp=%d pw=%x", c, pre, mp, pw);
+    if (!(pw & VM_PROT_WRITE)) return NULL;
 
     memset(c, 0, VX_SLOT);
     gCave += VX_SLOT;
@@ -302,8 +303,23 @@ static int vxTrampExec(uint8_t *tr) {
     int via = -1;
     for (int i = 0; i < gTrN; i++) if (gTrP[i] == tr) { via = gTrV[i]; break; }
     vxFlush(tr, VX_SLOT);
-    if (via == 5) return 0;
+
+    if (via == 5) {
+        uint64_t pg = (uint64_t)tr & ~(VX_PG - 1);
+        uint64_t en = ((uint64_t)tr + VX_SLOT + VX_PG - 1) & ~(VX_PG - 1);
+        size_t span = (size_t)(en - pg);
+        int r = mprotect((void *)pg, span, PROT_READ | PROT_EXEC);
+        int p = vxProtOf(tr);
+        if (!(p & VM_PROT_EXECUTE)) {
+            int v = vm_protect(mach_task_self(), pg, span, false, VM_PROT_READ | VM_PROT_EXECUTE);
+            p = vxProtOf(tr);
+            vxLog(@"[VEEX] xretry r=%d v=%d p=%x", r, v, p);
+        }
+        vxLog(@"[VEEX] xprot=%x", p);
+        return (p & VM_PROT_EXECUTE) ? 0 : -12;
+    }
     if (via == 2) { if (p_jitwp) p_jitwp(1); return 0; }
+
     uint64_t pg = (uint64_t)tr & ~(VX_PG - 1);
     int r = mprotect((void *)pg, VX_PG, PROT_READ | PROT_EXEC);
     vxLog(@"[VEEX] mpr=%d p1=%x", r, vxProtOf(tr));
@@ -380,7 +396,7 @@ static int vxInlineHook(void *target, void *rep, void **origOut) {
     int x1 = vxTrampExec(tr);
     vxLog(@"[VEEX] slotx=%d prot=%x", x1, vxProtOf(tr));
     vxFlush(t, 16);
-    return 0;
+    return x1;
 }
 
 static void vxHookName(const char *name, void *rep, void **origOut) {
@@ -1383,8 +1399,9 @@ static int l_testret(lua_State *L) {
     vxLog(@"[VEEX] rprep=%d", pr);
     if (pr != 0) { lua_pushinteger(L, pr); return 1; }
     ((uint32_t *)tr)[0] = 0xD65F03C0u;
-    vxTrampExec(tr);
-    vxLog(@"[VEEX] rprot=%x", vxProtOf(tr));
+    int xr = vxTrampExec(tr);
+    vxLog(@"[VEEX] rprot=%x rx=%d", vxProtOf(tr), xr);
+    if (xr != 0) { lua_pushinteger(L, xr); return 1; }
     vxCall((void *)tr, (void *)0);
     lua_pushinteger(L, 1);
     return 1;
@@ -1404,8 +1421,9 @@ static int l_testtramp(lua_State *L) {
     vxLog(@"[VEEX] tprep=%d", pr);
     if (pr != 0) { lua_pushinteger(L, pr); return 1; }
     vxEmitAbs((uint32_t *)tr, (uint64_t)h_harvest_c);
-    vxTrampExec(tr);
-    vxLog(@"[VEEX] tprot=%x", vxProtOf(tr));
+    int xr = vxTrampExec(tr);
+    vxLog(@"[VEEX] tprot=%x tx=%d", vxProtOf(tr), xr);
+    if (xr != 0) { lua_pushinteger(L, xr); return 1; }
     gHarvestN = 0;
     vxCall((void *)tr, (void *)0x5678);
     lua_pushinteger(L, gHarvestN);
