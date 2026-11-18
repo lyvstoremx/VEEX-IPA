@@ -1,4 +1,4 @@
-// src/shell.m — VEEX build 124
+// src/shell.m — VEEX build 125
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
@@ -40,7 +40,7 @@ extern kern_return_t mach_vm_remap(vm_map_t target_task, uint64_t *address, uint
                                    uint64_t src_address, int copy, int *cur_protection,
                                    int *max_protection, int inheritance);
 
-#define VX_BUILD 124
+#define VX_BUILD 125
 #define VX_STAGE 0
 #define VX_BOOT 3
 #define VX_HOOKSET 4
@@ -572,21 +572,65 @@ static void vxHookName(const char *name, void *rep, void **origOut) {
     else vxLog(@"[VEEX] !%@ (%d)", @(name), r);
 }
 
-// Rebindeo por fishhook con traza de cada simbolo.
+// Rebindeo propio: busca el puntero del simbolo en las tablas de cada imagen y lo escribe.
+static uint32_t (*r_count)(void) = NULL;
+static const void *(*r_hdr)(uint32_t) = NULL;
+static intptr_t (*r_slide)(uint32_t) = NULL;
+
 static void vxHookSym(const char *name, void *rep, void **origOut) {
-    char u[160];
-    snprintf(u, sizeof(u), "_%s", name);
     *origOut = NULL;
-    void *probe = dlsym(RTLD_DEFAULT, name);
-    if (!probe) { vxLog(@"[VEEX] s!%@ sin dlsym", @(name)); return; }
-    vxLog(@"[VEEX] s>%@ %p", @(name), probe);
-    struct rebinding rb;
-    rb.name = u;
-    rb.replacement = rep;
-    rb.replaced = origOut;
-    int r = rebind_symbols(&rb, 1);
-    vxLog(@"[VEEX] s<%@ r=%d old=%p", @(name), r, *origOut);
-    if (r == 0 && *origOut) gHooked++;
+    if (!r_count || !r_hdr || !r_slide) { vxLog(@"[VEEX] b!%@ sin dyld", @(name)); return; }
+    void *target = dlsym(RTLD_DEFAULT, name);
+    if (!target) { vxLog(@"[VEEX] b!%@ sin dlsym", @(name)); return; }
+
+    uint32_t n = r_count();
+    vxLog(@"[VEEX] b>%@ %p imgs=%u", @(name), target, n);
+    int hits = 0, blk = 0;
+
+    for (uint32_t i = 0; i < n; i++) {
+        const struct mach_header_64 *h = (const struct mach_header_64 *)r_hdr(i);
+        if (!h || h->magic != MH_MAGIC_64) continue;
+        if ((h->cpusubtype & 0xFF) == 2) vxLog(@"[VEEX] b e%u", i);
+        intptr_t slide = r_slide(i);
+        const struct load_command *lc = (const struct load_command *)(h + 1);
+        for (uint32_t k = 0; k < h->ncmds; k++) {
+            if (lc->cmd == LC_SEGMENT_64) {
+                const struct segment_command_64 *sg = (const struct segment_command_64 *)lc;
+                const struct section_64 *s = (const struct section_64 *)(sg + 1);
+                for (uint32_t j = 0; j < sg->nsects; j++) {
+                    uint32_t t = s[j].flags & SECTION_TYPE;
+                    if (t != S_LAZY_SYMBOL_POINTERS && t != S_NON_LAZY_SYMBOL_POINTERS) continue;
+                    if (!s[j].size || s[j].addr < 0x1000) continue;
+                    void **pt = (void **)((uintptr_t)slide + (uintptr_t)s[j].addr);
+                    size_t cnt = s[j].size / sizeof(void *);
+                    if (cnt > 20000) cnt = 20000;
+                    for (size_t q = 0; q < cnt; q++) {
+                        if (pt[q] != target) continue;
+                        uint64_t pg = (uint64_t)&pt[q] & ~(uint64_t)(VX_PG - 1);
+                        int pr = vxProtOf((void *)pg);
+                        if (!(pr & VM_PROT_WRITE)) {
+                            int r = mprotect((void *)pg, VX_PG, PROT_READ | PROT_WRITE);
+                            int p2 = vxProtOf((void *)pg);
+                            if (r != 0 || !(p2 & VM_PROT_WRITE)) {
+                                kern_return_t kv = vm_protect(mach_task_self(), pg, VX_PG, false,
+                                    VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY);
+                                p2 = vxProtOf((void *)pg);
+                                vxLog(@"[VEEX] b prot=%x mp=%d vp=%d pm=%x", pr, r, (int)kv, p2);
+                                if (!(p2 & VM_PROT_WRITE)) { blk++; continue; }
+                            }
+                        }
+                        if (!*origOut) *origOut = pt[q];
+                        pt[q] = rep;
+                        hits++;
+                        vxLog(@"[VEEX] b +%u:%s@%p", i, s[j].sectname, &pt[q]);
+                    }
+                }
+            }
+            lc = (const struct load_command *)((uint8_t *)lc + lc->cmdsize);
+        }
+    }
+    vxLog(@"[VEEX] b<%@ hits=%d blk=%d old=%p", @(name), hits, blk, *origOut);
+    if (hits) gHooked++;
 }
 
 static unsigned char *(*o_md5)(const void *, CC_LONG, unsigned char *) = NULL;
@@ -692,6 +736,9 @@ static void vxInstallHooks(void) {
     if (gInstalled) return;
     gInstalled = 1;
     if (!p_icache) p_icache = (void (*)(void *, size_t))dlsym(RTLD_DEFAULT, "sys_icache_invalidate");
+    if (!r_count) r_count = (uint32_t (*)(void))dlsym(RTLD_DEFAULT, "_dyld_image_count");
+    if (!r_hdr) r_hdr = (const void *(*)(uint32_t))dlsym(RTLD_DEFAULT, "_dyld_get_image_header");
+    if (!r_slide) r_slide = (intptr_t (*)(uint32_t))dlsym(RTLD_DEFAULT, "_dyld_get_image_vmaddr_slide");
 
 #if VX_HOOKSET >= 1
     vxHookSym("CC_MD5",    (void *)h_md5,    (void **)&o_md5);
