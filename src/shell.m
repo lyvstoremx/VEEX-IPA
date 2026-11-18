@@ -1,4 +1,4 @@
-// src/shell.m — VEEX build 125
+// src/shell.m — VEEX build 126
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
@@ -28,7 +28,6 @@
 #include "lua.h"
 #include "lauxlib.h"
 #include "lualib.h"
-#include "fishhook.h"
 
 extern kern_return_t vm_region_64(vm_map_t target_task, vm_address_t *address,
                                   vm_size_t *size, vm_region_flavor_t flavor,
@@ -40,16 +39,17 @@ extern kern_return_t mach_vm_remap(vm_map_t target_task, uint64_t *address, uint
                                    uint64_t src_address, int copy, int *cur_protection,
                                    int *max_protection, int inheritance);
 
-#define VX_BUILD 125
+#define VX_BUILD 126
 #define VX_STAGE 0
 #define VX_BOOT 3
-#define VX_HOOKSET 4
+#define VX_HOOKSET 5
 #define VX_AUTOHOOK 0
 #define VX_FPS 20
 
 #define SCRIPT_URL @"https://raw.githubusercontent.com/lyvstoremx/VEEX-IPA/main/scripts/esp.lua"
 
 extern int csops(pid_t pid, unsigned int ops, void *useraddr, size_t usersize);
+extern int csops_audittoken(pid_t pid, unsigned int ops, void *addr, size_t size, uint32_t *token);
 #define VX_CS_OPS_STATUS      0
 #define VX_CS_VALID           0x00000001
 #define VX_CS_GET_TASK_ALLOW  0x00000004
@@ -90,6 +90,7 @@ static uint64_t gTextLo = 0, gTextHi = 0, gTextSz = 0;
 static volatile int gHitMd5 = 0, gHitSha1 = 0, gHitSha256 = 0, gForced = 0;
 static volatile int gBodies = 0;
 static int gInstalled = 0;
+static int gFails = 0;
 
 static void vxRaw(const char *fmt, ...) {
     FILE *f = fopen("/tmp/vx.log", "a");
@@ -713,6 +714,17 @@ static int h_csops(pid_t p, unsigned int op, void *u, size_t s) {
     }
     return r;
 }
+static int (*o_csaudit)(pid_t, unsigned int, void *, size_t, uint32_t *) = NULL;
+static int h_csaudit(pid_t p, unsigned int op, void *u, size_t s, uint32_t *tk) {
+    int r = o_csaudit ? o_csaudit(p, op, u, s, tk) : -1;
+    if (r == 0 && op == VX_CS_OPS_STATUS && u) {
+        uint32_t f = *(uint32_t *)u;
+        f &= ~VX_CS_DEBUGGED;
+        f |= VX_CS_VALID | VX_CS_GET_TASK_ALLOW | VX_CS_HARD;
+        *(uint32_t *)u = f;
+    }
+    return r;
+}
 static int (*o_sysctl)(int *, u_int, void *, size_t *, void *, size_t) = NULL;
 static int h_sysctl(int *n, u_int l, void *o, size_t *ol, void *nw, size_t nl) {
     int r = o_sysctl ? o_sysctl(n, l, o, ol, nw, nl) : -1;
@@ -732,6 +744,11 @@ static int h_sysctlbyname(const char *nm, void *o, size_t *ol, void *nw, size_t 
     return r;
 }
 
+#define VXH(nm, fn, orig) do { \
+    vxHookSym(nm, (void *)(fn), (void **)&orig); \
+    if (!orig) { gFails++; vxLog(@"[VEEX] miss %@", @(nm)); } \
+} while (0)
+
 static void vxInstallHooks(void) {
     if (gInstalled) return;
     gInstalled = 1;
@@ -740,23 +757,32 @@ static void vxInstallHooks(void) {
     if (!r_hdr) r_hdr = (const void *(*)(uint32_t))dlsym(RTLD_DEFAULT, "_dyld_get_image_header");
     if (!r_slide) r_slide = (intptr_t (*)(uint32_t))dlsym(RTLD_DEFAULT, "_dyld_get_image_vmaddr_slide");
 
+    {
+        uint32_t st = 0;
+        int r = csops(getpid(), VX_CS_OPS_STATUS, &st, sizeof st);
+        vxLog(@"[VEEX] cs r=%d st=%x valid=%d", r, st, (st & VX_CS_VALID) ? 1 : 0);
+    }
+
 #if VX_HOOKSET >= 1
-    vxHookSym("CC_MD5",    (void *)h_md5,    (void **)&o_md5);
-    vxHookSym("CC_SHA1",   (void *)h_sha1,   (void **)&o_sha1);
-    vxHookSym("CC_SHA256", (void *)h_sha256, (void **)&o_sha256);
+    VXH("CC_MD5",    h_md5,    o_md5);
+    VXH("CC_SHA1",   h_sha1,   o_sha1);
+    VXH("CC_SHA256", h_sha256, o_sha256);
 #endif
 #if VX_HOOKSET >= 3
-    vxHookSym("_dyld_image_count",      (void *)h_dyld_image_count,     (void **)&o_dyld_image_count);
-    vxHookSym("_dyld_get_image_name",   (void *)h_dyld_get_image_name,  (void **)&o_dyld_get_image_name);
-    vxHookSym("_dyld_get_image_header", (void *)h_dyld_get_image_header,(void **)&o_dyld_get_image_header);
+    VXH("_dyld_image_count",      h_dyld_image_count,      o_dyld_image_count);
+    VXH("_dyld_get_image_name",   h_dyld_get_image_name,   o_dyld_get_image_name);
+    VXH("_dyld_get_image_header", h_dyld_get_image_header, o_dyld_get_image_header);
 #endif
 #if VX_HOOKSET >= 4
-    vxHookSym("csops",        (void *)h_csops,        (void **)&o_csops);
-    vxHookSym("sysctlbyname", (void *)h_sysctlbyname, (void **)&o_sysctlbyname);
-    vxHookSym("sysctl",       (void *)h_sysctl,       (void **)&o_sysctl);
+    VXH("sysctlbyname", h_sysctlbyname, o_sysctlbyname);
+    VXH("sysctl",       h_sysctl,       o_sysctl);
+#endif
+#if VX_HOOKSET >= 5
+    VXH("csops",            h_csops,   o_csops);
+    VXH("csops_audittoken", h_csaudit, o_csaudit);
 #endif
     if (!gMainHdr) gMainHdr = (uint64_t)_dyld_get_image_header(0);
-    vxLog(@"[VEEX] hooked=%d idx=%u", gHooked, gMyIdx);
+    vxLog(@"[VEEX] hooked=%d fails=%d", gHooked, gFails);
 }
 
 static void vxFindSelf(void) {
@@ -1060,6 +1086,7 @@ static void vxResetGuest(void);
     vxLog(@"[VEEX] H1 body");     vxInstallBody();
     vxLog(@"[VEEX] H2 hooks");    vxInstallHooks();
     vxLog(@"[VEEX] H3 self");     vxFindSelf();
+    vxLog(@"[VEEX] H3 self idx=%u", gMyIdx);
     vxLog(@"[VEEX] H4 loadname"); vxPatchLoadName();
     vxLog(@"[VEEX] H5 cryptid");  vxPatchCryptid();
     vxLog(@"[VEEX] H6 attest");   vxKillAttest();
