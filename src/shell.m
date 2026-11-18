@@ -1,4 +1,4 @@
-// src/shell.m — VEEX build 106
+// src/shell.m — VEEX build 107
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
@@ -31,7 +31,7 @@ extern kern_return_t vm_region_64(vm_map_t target_task, vm_address_t *address,
                                   vm_region_info_t info, mach_msg_type_number_t *infoCnt,
                                   mach_port_t *object_name);
 
-#define VX_BUILD 106
+#define VX_BUILD 107
 #define VX_STAGE 0
 #define VX_BOOT 3
 #define VX_HOOKSET 0
@@ -135,6 +135,14 @@ static void vxHex(const char *hex, unsigned char *out, int len) {
 #define VX_TR_MAX      140
 #define VX_SLOT        128
 #define VX_TRAMP_SZ    (VX_TRAMP_SLOTS * VX_SLOT)
+#define VX_CAVE_SZ     2048
+
+// Cueva ejecutable: sección propia dentro de __TEXT del dylib. Nace R-X.
+__attribute__((used, section("__TEXT,__vxcave")))
+static const uint8_t gCavePad[VX_CAVE_SZ] = {0};
+
+static uint8_t *gCave = (uint8_t *)gCavePad;
+static size_t gCaveLeft = VX_CAVE_SZ;
 
 static uint8_t gTrampBuf[VX_TRAMP_SZ] __attribute__((aligned(16)));
 
@@ -221,7 +229,7 @@ static void vxEnvProbe(void) {
     const char *ks[] = { "get-task-allow", "com.apple.security.cs.allow-jit",
                          "com.apple.security.cs.disable-library-validation" };
     for (int i = 0; i < 3; i++) {
-        CFStringRef k = CFStringCreateWithCString(NULL, ks[i], kCFStringEncodingUTF8);
+        CFStringRef k = CFStringCreateWithCString(NULL, kCFStringEncodingUTF8, ks[i]);
         CFTypeRef v = get(t, k, NULL);
         vxRaw("=== ent %s = %s ===", ks[i], v ? [(__bridge id)v description].UTF8String : "(nil)");
         if (v) CFRelease(v);
@@ -230,12 +238,36 @@ static void vxEnvProbe(void) {
     CFRelease(t);
 }
 
+// Cueva dentro de __TEXT: la página YA es ejecutable, solo hay que añadir W.
+static uint8_t *vxCaveTake(void) {
+    if (gCaveLeft < VX_SLOT) { vxLog(@"[VEEX] cave agotada"); return NULL; }
+    uint8_t *c = gCave;
+    uint64_t pg = (uint64_t)c & ~(uint64_t)(VX_PG - 1);
+    uint64_t en = ((uint64_t)c + VX_SLOT + VX_PG - 1) & ~(uint64_t)(VX_PG - 1);
+    size_t span = (size_t)(en - pg);
+
+    int mp = mprotect((void *)pg, span, PROT_READ | PROT_WRITE | PROT_EXEC);
+    int pr = vxProtOf(c);
+    if (mp != 0 || !(pr & VM_PROT_EXECUTE)) {
+        vm_protect(mach_task_self(), pg, span, false,
+                   VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXECUTE | VM_PROT_COPY);
+        pr = vxProtOf(c);
+    }
+    vxLog(@"[VEEX] cave=%p mp=%d cprot=%x", c, mp, pr);
+    if (!(pr & VM_PROT_EXECUTE)) return NULL;
+
+    memset(c, 0, VX_SLOT);
+    gCave += VX_SLOT;
+    gCaveLeft -= VX_SLOT;
+    return c;
+}
+
 static int vxTrampPrep(uint8_t **out) {
     if (gTrN >= VX_TR_MAX) return -9;
-    uint8_t *tr = NULL;
-    int via = -1;
+    uint8_t *tr = vxCaveTake();
+    int via = tr ? 5 : -1;
 
-    if (p_jitwp) {
+    if (!tr && p_jitwp) {
         void *m = mmap(NULL, VX_PG, PROT_READ | PROT_WRITE,
                        MAP_PRIVATE | MAP_ANON | MAP_JIT, -1, 0);
         if (m != MAP_FAILED) { p_jitwp(0); tr = (uint8_t *)m; via = 2; }
@@ -270,6 +302,7 @@ static int vxTrampExec(uint8_t *tr) {
     int via = -1;
     for (int i = 0; i < gTrN; i++) if (gTrP[i] == tr) { via = gTrV[i]; break; }
     vxFlush(tr, VX_SLOT);
+    if (via == 5) return 0;                       // cueva: ya R-W-X
     if (via == 2) { if (p_jitwp) p_jitwp(1); return 0; }
     uint64_t pg = (uint64_t)tr & ~(VX_PG - 1);
     int r = mprotect((void *)pg, VX_PG, PROT_READ | PROT_EXEC);
@@ -1719,6 +1752,7 @@ __attribute__((constructor)) static void vxInit(void) {
     if (!p_icache) p_icache = (void (*)(void *, size_t))dlsym(RTLD_DEFAULT, "sys_icache_invalidate");
     if (!p_jitwp) p_jitwp = (int (*)(int))dlsym(RTLD_DEFAULT, "pthread_jit_write_protect_np");
     vxRaw("=== icache=%p jitwp=%p ===", p_icache, p_jitwp);
+    vxRaw("=== cave=%p prot=%x ===", gCavePad, vxProtOf((void *)gCavePad));
     vxEnvProbe();
     if (!gLog) gLog = [NSMutableString new];
     gDocs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
