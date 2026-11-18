@@ -23,7 +23,7 @@ jobs:
           clang -dynamiclib -target arm64-apple-ios14.0 -isysroot "$SDK" -fobjc-arc -fno-objc-relative-method-lists -O2 \
             -Isrc -Ilua-src -install_name @rpath/libAudioEngine.dylib \
             -framework Foundation -framework UIKit -framework CoreGraphics -framework QuartzCore -framework Security \
-            -o out/libAudioEngine.dylib src/shell.m $SRC 2> err.log || true
+            -o out/libAudioEngine.dylib src/shell.m src/fishhook.c $SRC 2> err.log || true
           if [ -s err.log ]; then
             grep -m 6 -E "error:" err.log | while IFS= read -r L; do echo "::error file=src/shell.m::$L"; done
             echo "----- primeras lineas del compilador -----"
