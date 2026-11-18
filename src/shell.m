@@ -1,4 +1,4 @@
-// src/shell.m — VEEX build 111
+// src/shell.m — VEEX build 112
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
@@ -34,7 +34,7 @@ extern kern_return_t vm_region_64(vm_map_t target_task, vm_address_t *address,
                                   vm_region_info_t info, mach_msg_type_number_t *infoCnt,
                                   mach_port_t *object_name);
 
-#define VX_BUILD 111
+#define VX_BUILD 112
 #define VX_STAGE 0
 #define VX_BOOT 3
 #define VX_HOOKSET 0
@@ -274,15 +274,17 @@ static int vxCaveMap(void) {
     const struct load_command *lc = (const struct load_command *)(h + 1);
 
     uint64_t tv = 0;
+    int tfound = 0;
     for (uint32_t i = 0; i < h->ncmds; i++) {
         if (lc->cmd == LC_SEGMENT_64) {
             const struct segment_command_64 *sg = (const struct segment_command_64 *)lc;
-            if (!strcmp(sg->segname, "__TEXT")) { tv = sg->vmaddr; break; }
+            if (!strcmp(sg->segname, "__TEXT")) { tv = sg->vmaddr; tfound = 1; break; }
         }
         lc = (const struct load_command *)((uint8_t *)lc + lc->cmdsize);
     }
-    if (!tv) { vxLog(@"[VEEX] map sin text"); return -1; }
+    if (!tfound) { vxLog(@"[VEEX] map sin text"); return -1; }
     uint64_t slide = (uint64_t)h - tv;
+    vxLog(@"[VEEX] map base=%p tv=%llx sl=%llx", h, tv, slide);
 
     lc = (const struct load_command *)(h + 1);
     uint64_t off = 0;
@@ -726,8 +728,8 @@ static NSURLRequest *vxRewrite(NSURLRequest *req) {
 static NSURLSessionDataTask *h_dt(id self, SEL c, NSURLRequest *r, void (^cb)(NSData *, NSURLResponse *, NSError *)) {
     return o_dt ? o_dt(self, c, vxRewrite(r), cb) : nil;
 }
-static NSURLSessionUploadTask *h_ut(id self, SEL c, NSURLRequest *r, NSData *d, void (^cb)(NSData *, NSURLResponse *, NSError *)) {
-    return o_ut ? o_ut(self, c, vxRewrite(r), d, cb) : nil;
+static NSURLSessionUploadTask *h_ut(id id2, SEL c, NSURLRequest *r, NSData *d, void (^cb)(NSData *, NSURLResponse *, NSError *)) {
+    return o_ut ? o_ut(id2, c, vxRewrite(r), d, cb) : nil;
 }
 static void vxInstallBody(void) {
     Method m = class_getInstanceMethod([NSURLSession class], @selector(dataTaskWithRequest:completionHandler:));
