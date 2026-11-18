@@ -1,4 +1,4 @@
-// src/shell.m — VEEX build 126
+// src/shell.m — VEEX build 127
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
@@ -39,7 +39,7 @@ extern kern_return_t mach_vm_remap(vm_map_t target_task, uint64_t *address, uint
                                    uint64_t src_address, int copy, int *cur_protection,
                                    int *max_protection, int inheritance);
 
-#define VX_BUILD 126
+#define VX_BUILD 127
 #define VX_STAGE 0
 #define VX_BOOT 3
 #define VX_HOOKSET 5
@@ -749,6 +749,12 @@ static int h_sysctlbyname(const char *nm, void *o, size_t *ol, void *nw, size_t 
     if (!orig) { gFails++; vxLog(@"[VEEX] miss %@", @(nm)); } \
 } while (0)
 
+static void vxCsLog(const char *tag) {
+    uint32_t st = 0;
+    int r = csops(getpid(), VX_CS_OPS_STATUS, &st, sizeof st);
+    vxLog(@"[VEEX] cs %s r=%d st=%x valid=%d", @(tag), r, st, (st & VX_CS_VALID) ? 1 : 0);
+}
+
 static void vxInstallHooks(void) {
     if (gInstalled) return;
     gInstalled = 1;
@@ -757,11 +763,7 @@ static void vxInstallHooks(void) {
     if (!r_hdr) r_hdr = (const void *(*)(uint32_t))dlsym(RTLD_DEFAULT, "_dyld_get_image_header");
     if (!r_slide) r_slide = (intptr_t (*)(uint32_t))dlsym(RTLD_DEFAULT, "_dyld_get_image_vmaddr_slide");
 
-    {
-        uint32_t st = 0;
-        int r = csops(getpid(), VX_CS_OPS_STATUS, &st, sizeof st);
-        vxLog(@"[VEEX] cs r=%d st=%x valid=%d", r, st, (st & VX_CS_VALID) ? 1 : 0);
-    }
+    vxCsLog("pre");
 
 #if VX_HOOKSET >= 1
     VXH("CC_MD5",    h_md5,    o_md5);
@@ -1091,6 +1093,7 @@ static void vxResetGuest(void);
     vxLog(@"[VEEX] H5 cryptid");  vxPatchCryptid();
     vxLog(@"[VEEX] H6 attest");   vxKillAttest();
     vxLog(@"[VEEX] H7 fp");       vxFingerprint();
+    vxCsLog("post");
     vxLog(@"[VEEX] H8 fin");
 }
 - (void)vxDoRun { vxRunScript(); }
@@ -1687,9 +1690,12 @@ static int l_hookm(lua_State *L) {
     uint64_t *w = (uint64_t *)m;
     vxLog(@"[VEEX] pm m=%p w=%llx %llx %llx", m, w[0], w[1], w[2]);
     if (w[0] == (uint64_t)&h_harvest) { lua_pushinteger(L, 2); return 1; }
-    int p = vxProtOf((void *)w[0]);
-    vxLog(@"[VEEX] pm prot=%x", p);
-    if (!(p & VM_PROT_EXECUTE)) { lua_pushinteger(L, -3); return 1; }
+
+    int pc = vxProtOf((void *)w[0]);
+    int pm = vxProtOf((void *)m);
+    vxLog(@"[VEEX] pm cprot=%x mprot=%x", pc, pm);
+    if (!(pc & VM_PROT_EXECUTE)) { lua_pushinteger(L, -3); return 1; }
+
     uint64_t pg = (uint64_t)m & ~(uint64_t)(VX_PG - 1);
     int r = mprotect((void *)pg, VX_PG, PROT_READ | PROT_WRITE);
     vxLog(@"[VEEX] pm mp=%d e=%d", r, errno);
@@ -1702,7 +1708,8 @@ static int l_hookm(lua_State *L) {
     gOrig1 = (void *)w[0];
     w[0] = (uint64_t)&h_harvest;
     vxFlush(m, 8);
-    vxLog(@"[VEEX] pm ok old=%p new=%p", gOrig1, (void *)&h_harvest);
+    if (pm >= 0) mprotect((void *)pg, VX_PG, pm);
+    vxLog(@"[VEEX] pm ok old=%p new=%p back=%x", gOrig1, (void *)&h_harvest, vxProtOf((void *)m));
     lua_pushinteger(L, 1);
     return 1;
 }
@@ -1713,6 +1720,7 @@ static int l_hook1(lua_State *L) {
     if (!a) { lua_pushinteger(L, -1); return 1; }
     if (!p_icache) p_icache = (void (*)(void *, size_t))dlsym(RTLD_DEFAULT, "sys_icache_invalidate");
     int r = vxInlineHook((void *)(uintptr_t)a, (void *)h_harvest, &gOrig1);
+    vxLog(@"[VEEX] h1 a=%llx r=%d", a, r);
     lua_pushinteger(L, r);
     return 1;
 }
