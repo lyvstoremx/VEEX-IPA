@@ -1,4 +1,4 @@
-// src/shell.m — VEEX build 107
+// src/shell.m — VEEX build 108
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
@@ -31,7 +31,7 @@ extern kern_return_t vm_region_64(vm_map_t target_task, vm_address_t *address,
                                   vm_region_info_t info, mach_msg_type_number_t *infoCnt,
                                   mach_port_t *object_name);
 
-#define VX_BUILD 107
+#define VX_BUILD 108
 #define VX_STAGE 0
 #define VX_BOOT 3
 #define VX_HOOKSET 0
@@ -137,7 +137,7 @@ static void vxHex(const char *hex, unsigned char *out, int len) {
 #define VX_TRAMP_SZ    (VX_TRAMP_SLOTS * VX_SLOT)
 #define VX_CAVE_SZ     2048
 
-// Cueva ejecutable: sección propia dentro de __TEXT del dylib. Nace R-X.
+// Cueva ejecutable: seccion propia dentro de __TEXT del dylib. Nace R-X.
 __attribute__((used, section("__TEXT,__vxcave")))
 static const uint8_t gCavePad[VX_CAVE_SZ] = {0};
 
@@ -229,7 +229,7 @@ static void vxEnvProbe(void) {
     const char *ks[] = { "get-task-allow", "com.apple.security.cs.allow-jit",
                          "com.apple.security.cs.disable-library-validation" };
     for (int i = 0; i < 3; i++) {
-        CFStringRef k = CFStringCreateWithCString(NULL, kCFStringEncodingUTF8, ks[i]);
+        CFStringRef k = CFStringCreateWithCString(NULL, ks[i], kCFStringEncodingUTF8);
         CFTypeRef v = get(t, k, NULL);
         vxRaw("=== ent %s = %s ===", ks[i], v ? [(__bridge id)v description].UTF8String : "(nil)");
         if (v) CFRelease(v);
@@ -238,7 +238,7 @@ static void vxEnvProbe(void) {
     CFRelease(t);
 }
 
-// Cueva dentro de __TEXT: la página YA es ejecutable, solo hay que añadir W.
+// Cueva dentro de __TEXT: la pagina YA es ejecutable, solo hay que anadir W.
 static uint8_t *vxCaveTake(void) {
     if (gCaveLeft < VX_SLOT) { vxLog(@"[VEEX] cave agotada"); return NULL; }
     uint8_t *c = gCave;
@@ -302,7 +302,7 @@ static int vxTrampExec(uint8_t *tr) {
     int via = -1;
     for (int i = 0; i < gTrN; i++) if (gTrP[i] == tr) { via = gTrV[i]; break; }
     vxFlush(tr, VX_SLOT);
-    if (via == 5) return 0;                       // cueva: ya R-W-X
+    if (via == 5) return 0;
     if (via == 2) { if (p_jitwp) p_jitwp(1); return 0; }
     uint64_t pg = (uint64_t)tr & ~(VX_PG - 1);
     int r = mprotect((void *)pg, VX_PG, PROT_READ | PROT_EXEC);
@@ -1570,12 +1570,12 @@ static void vxBuildTab(void) {
         addRow(@"Color auto", @"esp.color", y);
     } else if (gTab == 1) {
         addRow(@"Aimbot", @"aim.on", y); y += 36;
-        addRow(@"Predicción", @"aim.pred", y); y += 36;
+        addRow(@"Prediccion", @"aim.pred", y); y += 36;
         addRow(@"Humanizar", @"aim.human", y); y += 36;
         addRow(@"Modo silencioso", @"aim.silent", y); y += 36;
         addRow(@"AWM / larga", @"aim.awm", y);
     } else if (gTab == 2) {
-        addRow(@"Líneas", @"draw.line", y); y += 36;
+        addRow(@"Lineas", @"draw.line", y); y += 36;
         addRow(@"Salud", @"draw.hp", y); y += 36;
         addRow(@"Arma", @"draw.wpn", y); y += 36;
         addRow(@"Esqueleto", @"draw.skel", y);
