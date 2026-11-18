@@ -1,4 +1,4 @@
-// src/shell.m — VEEX build 113
+// src/shell.m — VEEX build 114
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
@@ -34,7 +34,12 @@ extern kern_return_t vm_region_64(vm_map_t target_task, vm_address_t *address,
                                   vm_region_info_t info, mach_msg_type_number_t *infoCnt,
                                   mach_port_t *object_name);
 
-#define VX_BUILD 113
+extern kern_return_t mach_vm_remap(vm_map_t target_task, uint64_t *address, uint64_t size,
+                                   uint64_t mask, int flags, vm_map_t src_task,
+                                   uint64_t src_address, int copy, int *cur_protection,
+                                   int *max_protection, int inheritance);
+
+#define VX_BUILD 114
 #define VX_STAGE 0
 #define VX_BOOT 3
 #define VX_HOOKSET 0
@@ -147,7 +152,7 @@ static const uint8_t gCavePad[VX_CAVE_SZ] = {0};
 static uint8_t *gCave = (uint8_t *)gCavePad;
 static size_t gCaveLeft = VX_CAVE_SZ;
 
-// Mapeo por fichero del propio dylib (contenido firmado -> si recibe X).
+// Alias de fichero: uno ejecutable, otro escribible sobre la misma pagina.
 static uint8_t *gMapW = NULL;
 static uint8_t *gMapX = NULL;
 static size_t gMapLeft = 0;
@@ -260,7 +265,59 @@ static void vxEnvProbe(void) {
     CFRelease(t);
 }
 
-// Mapea el propio dylib: 1 = RWX unico, 2 = alias RW + alias RX.
+// Crea alias ejecutable + alias escribible del mismo offset de fichero.
+static int vxMapPair(const char *path, uint64_t off) {
+    int fd = open(path, O_RDWR);
+    int canw = (fd >= 0);
+    if (fd < 0) fd = open(path, O_RDONLY);
+    if (fd < 0) { vxLog(@"[VEEX] pair open=%d e=%d", fd, errno); return -1; }
+
+    uint64_t pa = off & ~(uint64_t)(VX_PG - 1);
+    size_t delta = (size_t)(off - pa);
+    size_t len = (size_t)VX_PG * 2;
+
+    void *me = mmap(NULL, len, PROT_READ | PROT_EXEC, MAP_SHARED, fd, (off_t)pa);
+    if (me == MAP_FAILED) { vxLog(@"[VEEX] pair x fallo e=%d", errno); close(fd); return -1; }
+    uint8_t *bx = (uint8_t *)me + delta;
+    int pe = vxProtOf(bx);
+    vxLog(@"[VEEX] pair x=%p pe=%x canw=%d", bx, pe, canw);
+    if (!(pe & VM_PROT_EXECUTE)) { munmap(me, len); close(fd); return -1; }
+
+    uint8_t *bw = NULL;
+    if (canw) {
+        void *mw = mmap(NULL, len, PROT_READ | PROT_WRITE, MAP_SHARED, fd, (off_t)pa);
+        if (mw != MAP_FAILED) {
+            bw = (uint8_t *)mw + delta;
+            int pw = vxProtOf(bw);
+            vxLog(@"[VEEX] pair w=%p pw=%x", bw, pw);
+            if (!(pw & VM_PROT_WRITE)) { munmap(mw, len); bw = NULL; }
+        } else vxLog(@"[VEEX] pair w fallo e=%d", errno);
+    }
+
+    if (!bw) {
+        uint64_t na = 0; int cp = 0, mp = 0;
+        kern_return_t k = mach_vm_remap(mach_task_self(), &na, len, 0, VM_FLAGS_ANYWHERE,
+                                        mach_task_self(), (uint64_t)me, 0, &cp, &mp, VM_INHERIT_NONE);
+        vxLog(@"[VEEX] pair remap=%d", (int)k);
+        if (k == KERN_SUCCESS) {
+            uint8_t *t = (uint8_t *)na + delta;
+            int r2 = mprotect((uint8_t *)na, len, PROT_READ | PROT_WRITE);
+            int pw2 = vxProtOf(t);
+            vxLog(@"[VEEX] pair alias=%p mp=%d pw=%x", t, r2, pw2);
+            if (pw2 & VM_PROT_WRITE) bw = t;
+        }
+    }
+    if (!bw) { munmap(me, len); close(fd); return -1; }
+
+    bw[0] = 0xA5;
+    vxLog(@"[VEEX] pair reflejo=%x", bx[0]);
+    if (bx[0] != (uint8_t)0xA5) { munmap(me, len); close(fd); return -1; }
+
+    close(fd);
+    gMapW = bw; gMapX = bx; gMapLeft = VX_CAVE_SZ;
+    return 3;
+}
+
 static int vxCaveMap(void) {
     if (gMapMode) return gMapMode;
     gMapMode = -1;
@@ -303,47 +360,21 @@ static int vxCaveMap(void) {
         lc = (const struct load_command *)((uint8_t *)lc + lc->cmdsize);
     }
     if (!off) { vxLog(@"[VEEX] map sin seccion"); return -1; }
+    vxLog(@"[VEEX] map off=%llx", off);
 
-    int fd = open(di.dli_fname, O_RDONLY);
-    if (fd < 0) { vxLog(@"[VEEX] map open=%d e=%d", fd, errno); return -1; }
+    int r = vxMapPair(di.dli_fname, off);
+    if (r > 0) return r;
 
-    struct stat st;
-    if (fstat(fd, &st) != 0) { vxLog(@"[VEEX] map fstat e=%d", errno); close(fd); return -1; }
-    vxLog(@"[VEEX] map off=%llx size=%llx", off, (uint64_t)st.st_size);
-    if (off >= (uint64_t)st.st_size) { vxLog(@"[VEEX] map off fuera"); close(fd); return -1; }
-
-    uint64_t pa = off & ~(uint64_t)(VX_PG - 1);
-    size_t delta = (size_t)(off - pa);
-    size_t len = (size_t)VX_PG * 2;
-
-    void *a = mmap(NULL, len, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE, fd, (off_t)pa);
-    if (a != MAP_FAILED) {
-        uint8_t *base = (uint8_t *)a + delta;
-        int p = vxProtOf(base);
-        vxLog(@"[VEEX] mapA=%p p=%x", base, p);
-        if ((p & VM_PROT_EXECUTE) && (p & VM_PROT_WRITE)) {
-            gMapMode = 1; gMapW = base; gMapX = base; gMapLeft = VX_CAVE_SZ;
-            close(fd); return 1;
-        }
-        munmap(a, len);
-    } else vxLog(@"[VEEX] mapA fallo e=%d", errno);
-
-    void *mw = mmap(NULL, len, PROT_READ | PROT_WRITE, MAP_SHARED, fd, (off_t)pa);
-    int ew = errno;
-    void *me = mmap(NULL, len, PROT_READ | PROT_EXEC, MAP_SHARED, fd, (off_t)pa);
-    int ex = errno;
-    uint8_t *bw = mw == MAP_FAILED ? NULL : (uint8_t *)mw + delta;
-    uint8_t *bx = me == MAP_FAILED ? NULL : (uint8_t *)me + delta;
-    int pw = bw ? vxProtOf(bw) : -1;
-    int pe = bx ? vxProtOf(bx) : -1;
-    vxLog(@"[VEEX] mapB w=%p pw=%x e=%d x=%p pe=%x e=%d", bw, pw, ew, bx, pe, ex);
-    if (bw && bx && (pw & VM_PROT_WRITE) && (pe & VM_PROT_EXECUTE)) {
-        gMapMode = 2; gMapW = bw; gMapX = bx; gMapLeft = VX_CAVE_SZ;
-        close(fd); return 2;
+    NSString *cp = [gDocs stringByAppendingPathComponent:@"veexcave.bin"];
+    if (![[NSFileManager defaultManager] fileExistsAtPath:cp]) {
+        NSData *dd = [NSData dataWithContentsOfFile:@(di.dli_fname)];
+        if (dd.length) [dd writeToFile:cp atomically:YES];
     }
-    if (mw != MAP_FAILED) munmap(mw, len);
-    if (me != MAP_FAILED) munmap(me, len);
-    close(fd);
+    if ([[NSFileManager defaultManager] fileExistsAtPath:cp]) {
+        vxLog(@"[VEEX] map copia intento");
+        r = vxMapPair(cp.UTF8String, off);
+        if (r > 0) return r;
+    }
     return -1;
 }
 
@@ -385,7 +416,7 @@ static int vxTrampPrep(uint8_t **out) {
         int pre = vxProtOf(c);
         int mp = mprotect((void *)pg, (size_t)(en - pg), PROT_READ | PROT_WRITE);
         int pw = vxProtOf(c);
-        vxLog(@"[VEEX] cave=%p pre=%x mp=%d pw=%x", c, pre, mp, pw);
+        vxRaw("[VEEX] cave=%p pre=%x mp=%d pw=%x", c, pre, mp, pw);
         if (pw & VM_PROT_WRITE) { memset(c, 0, VX_SLOT); gCave += VX_SLOT; gCaveLeft -= VX_SLOT; tr = c; via = 5; }
     }
     if (!tr && p_jitwp) {
