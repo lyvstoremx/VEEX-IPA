@@ -1,141 +1,102 @@
-// Copyright (c) 2013, Facebook, Inc. — versión 64 bits
-#include <stdbool.h>
-#include <stdint.h>
-#include <stdlib.h>
-#include <string.h>
-#include <sys/mman.h>
-#include <sys/types.h>
-#include <mach/mach.h>
-#include <mach/vm_map.h>
+#include "fishhook.h"
 #include <mach-o/dyld.h>
 #include <mach-o/loader.h>
-#include <mach-o/nlist.h>
+#include <mach/mach.h>
+#include <dlfcn.h>
+#include <string.h>
+#include <stdio.h>
+#include <unistd.h>
 
-#include "fishhook.h"
+#define VXLOG(...) do { fprintf(stderr, "[VEEX] " __VA_ARGS__); fputc('\n', stderr); } while (0)
 
-#ifndef INDIRECT_SYMBOL_LOCAL
-#define INDIRECT_SYMBOL_LOCAL 0x80000000
-#endif
-#ifndef INDIRECT_SYMBOL_ABS
-#define INDIRECT_SYMBOL_ABS 0x40000000
-#endif
-
-static struct rebindings_entry *_rebindings_head;
-
-static int prepend_rebindings(struct rebindings_entry **head,
-                              struct rebinding rebindings[], size_t nel) {
-  struct rebindings_entry *n =
-      (struct rebindings_entry *)malloc(sizeof(struct rebindings_entry));
-  if (!n) return -1;
-  n->rebindings = (struct rebinding *)malloc(sizeof(struct rebinding) * nel);
-  if (!n->rebindings) { free(n); return -1; }
-  memcpy(n->rebindings, rebindings, sizeof(struct rebinding) * nel);
-  n->rebindings_nel = nel;
-  n->next = *head;
-  *head = n;
-  return 0;
+static int sec_ok(const char *seg, const char *sect) {
+    if (strcmp(seg, "__DATA") && strcmp(seg, "__DATA_CONST") &&
+        strcmp(seg, "__AUTH") && strcmp(seg, "__AUTH_CONST")) return 0;
+    if (!strcmp(sect, "__got")) return 1;
+    if (!strcmp(sect, "__auth_got")) return 1;
+    if (!strcmp(sect, "__la_symbol_ptr")) return 1;
+    if (!strcmp(sect, "__nl_symbol_ptr")) return 1;
+    if (!strcmp(sect, "__auth_ptr")) return 1;
+    return 0;
 }
 
-static void perform_rebinding_with_section(struct rebindings_entry *rebindings,
-                                           struct section_64 *section,
-                                           intptr_t slide,
-                                           struct nlist_64 *symtab,
-                                           char *strtab,
-                                           uint32_t *indirect_symtab) {
-  uint32_t *indirect_symbol_indices = indirect_symtab + section->reserved1;
-  void **indirect_symbol_bindings = (void **)((uintptr_t)slide + section->addr);
+static void patch_sec(uintptr_t start, uintptr_t end, void *target,
+                      void *repl, int *hits, int *blk, int rw) {
+    vm_size_t pg = (vm_size_t)getpagesize();
+    vm_prot_t back = rw ? (VM_PROT_READ | VM_PROT_WRITE) : VM_PROT_READ;
+    uintptr_t s;
 
-  for (uint32_t i = 0; i < section->size / sizeof(void *); i++) {
-    uint32_t symtab_index = indirect_symbol_indices[i];
-    if (symtab_index == INDIRECT_SYMBOL_ABS ||
-        symtab_index == INDIRECT_SYMBOL_LOCAL ||
-        symtab_index == (INDIRECT_SYMBOL_LOCAL | INDIRECT_SYMBOL_ABS)) {
-      continue;
+    for (s = start; s + sizeof(void *) <= end; s += sizeof(void *)) {
+        if (*(void **)s != target) continue;
+
+        uintptr_t page = s & ~(pg - 1);
+        kern_return_t kr = vm_protect(mach_task_self(), page, pg, 0,
+                                      VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY);
+        if (kr != KERN_SUCCESS)
+            kr = vm_protect(mach_task_self(), page, pg, 0,
+                            VM_PROT_READ | VM_PROT_WRITE);
+        if (kr != KERN_SUCCESS) { (*blk)++; continue; }
+
+        *(void **)s = repl;
+        (*hits)++;
+        vm_protect(mach_task_self(), page, pg, 0, back);
     }
-    uint32_t strtab_offset = symtab[symtab_index].n_un.n_strx;
-    char *symbol_name = strtab + strtab_offset;
-    struct rebindings_entry *cur = rebindings;
-    while (cur) {
-      for (uint32_t j = 0; j < cur->rebindings_nel; j++) {
-        if (strlen(symbol_name) > 1 &&
-            strcmp(&symbol_name[1], cur->rebindings[j].name) == 0) {
-          if (cur->rebindings[j].replaced != NULL &&
-              indirect_symbol_bindings[i] != cur->rebindings[j].replacement) {
-            *(cur->rebindings[j].replaced) = indirect_symbol_bindings[i];
-          }
-          indirect_symbol_bindings[i] = cur->rebindings[j].replacement;
-          goto next;
+}
+
+void *vxHookSym(const char *name, void *repl, void **origOut) {
+    if (!name || !repl) return NULL;
+
+    void *target = dlsym(RTLD_DEFAULT, name);
+    if (!target) { VXLOG("b! %s nodlsym", name); return NULL; }
+    if (target == repl) { VXLOG("b! %s ya", name); return NULL; }
+
+    int hits = 0, blk = 0;
+    uint32_t n = _dyld_image_count(), i;
+
+    for (i = 0; i < n; i++) {
+        const struct mach_header_64 *mh =
+            (const struct mach_header_64 *)_dyld_get_image_header(i);
+        if (!mh || mh->magic != MH_MAGIC_64) continue;
+
+        VXLOG("b e%u", i);
+
+        intptr_t slide = _dyld_get_image_vmaddr_slide(i);
+        const uint8_t *p = (const uint8_t *)(mh + 1);
+        uint32_t c;
+
+        for (c = 0; c < mh->ncmds; c++) {
+            const struct load_command *lc = (const struct load_command *)p;
+            if (lc->cmdsize < sizeof(*lc)) break;
+
+            if (lc->cmd == LC_SEGMENT_64) {
+                const struct segment_command_64 *sc =
+                    (const struct segment_command_64 *)lc;
+                const struct section_64 *s = (const struct section_64 *)(sc + 1);
+                uint32_t k;
+
+                for (k = 0; k < sc->nsects; k++, s++) {
+                    if (!sec_ok(sc->segname, s->sectname)) continue;
+                    if (s->size < sizeof(void *)) continue;
+
+                    uintptr_t a = (uintptr_t)(s->addr + slide);
+                    int before = hits;
+                    int rw = !strcmp(sc->segname, "__DATA") ||
+                             !strcmp(sc->segname, "__AUTH");
+
+                    patch_sec(a, a + (uintptr_t)s->size, target, repl,
+                              &hits, &blk, rw);
+
+                    if (hits > before)
+                        VXLOG("b +%u:%s@%p", i, s->sectname, (void *)a);
+                }
+            }
+            p += lc->cmdsize;
         }
-      }
-      cur = cur->next;
     }
-  next:;
-  }
-}
 
-int rebind_symbols_image(void *header, intptr_t slide,
-                         struct rebinding rebindings[], size_t rebindings_nel) {
-  struct rebindings_entry *head = NULL;
-  if (prepend_rebindings(&head, rebindings, rebindings_nel) < 0) return -1;
-  head->next = _rebindings_head;
+    VXLOG("b<%s hits=%d blk=%d old=%p", name, hits, blk, target);
 
-  struct mach_header_64 *mh = (struct mach_header_64 *)header;
-  struct symtab_command *symtab_cmd = NULL;
-  struct dysymtab_command *dysym_cmd = NULL;
-
-  struct load_command *cmd =
-      (struct load_command *)((uintptr_t)mh + sizeof(struct mach_header_64));
-  for (uint32_t i = 0; i < mh->ncmds; i++) {
-    if (cmd->cmd == LC_SYMTAB) symtab_cmd = (struct symtab_command *)cmd;
-    if (cmd->cmd == LC_DYSYMTAB) dysym_cmd = (struct dysymtab_command *)cmd;
-    cmd = (struct load_command *)((uintptr_t)cmd + cmd->cmdsize);
-  }
-  if (!symtab_cmd || !dysym_cmd) return 0;
-
-  struct nlist_64 *symtab =
-      (struct nlist_64 *)((uintptr_t)header + symtab_cmd->symoff);
-  char *strtab = (char *)((uintptr_t)header + symtab_cmd->stroff);
-  uint32_t *indirect =
-      (uint32_t *)((uintptr_t)header + dysym_cmd->indirectsymoff);
-
-  struct load_command *cmd2 =
-      (struct load_command *)((uintptr_t)mh + sizeof(struct mach_header_64));
-  for (uint32_t j = 0; j < mh->ncmds; j++) {
-    if (cmd2->cmd == LC_SEGMENT_64) {
-      struct segment_command_64 *seg = (struct segment_command_64 *)cmd2;
-      if (!strcmp(seg->segname, "__DATA") ||
-          !strcmp(seg->segname, "__DATA_CONST")) {
-        struct section_64 *sect =
-            (struct section_64 *)((uintptr_t)seg + sizeof(struct segment_command_64));
-        for (uint32_t k = 0; k < seg->nsects; k++) {
-          uint32_t type = sect[k].flags & SECTION_TYPE;
-          if (type == S_LAZY_SYMBOL_POINTERS || type == S_NON_LAZY_SYMBOL_POINTERS) {
-            perform_rebinding_with_section(head, &sect[k], slide,
-                                           symtab, strtab, indirect);
-          }
-        }
-      }
-    }
-    cmd2 = (struct load_command *)((uintptr_t)cmd2 + cmd2->cmdsize);
-  }
-  return 0;
-}
-
-int rebind_symbols(struct rebinding rebindings[], size_t rebindings_nel) {
-  int ret = prepend_rebindings(&_rebindings_head, rebindings, rebindings_nel);
-  if (ret < 0) return ret;
-
-  if (!_rebindings_head->next) {
-    _dyld_register_func_for_add_image(
-        (void (*)(const struct mach_header *, intptr_t))rebind_symbols_image);
-  } else {
-    uint32_t c = _dyld_image_count();
-    for (uint32_t i = 0; i < c; i++) {
-      const struct mach_header *h = _dyld_get_image_header(i);
-      rebind_symbols_image((void *)h, _dyld_get_image_vmaddr_slide(i),
-                           _rebindings_head->rebindings,
-                           _rebindings_head->rebindings_nel);
-    }
-  }
-  return 0;
+    if (!hits) return NULL;
+    if (origOut) *origOut = target;
+    return target;
 }
