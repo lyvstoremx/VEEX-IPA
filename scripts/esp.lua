@@ -8,6 +8,11 @@ function tick()
 
   if step == 0 then
     step = 1
+    for _, n in ipairs({ "il2cpp_domain_get", "il2cpp_class_from_name",
+                         "il2cpp_class_get_method_from_name", "il2cpp_class_get_methods",
+                         "il2cpp_object_get_class", "il2cpp_field_get_offset" }) do
+      log("s " .. n .. "=" .. tostring(sym(n)))
+    end
     PLC = i2c_class("COW.GamePlay", "Player")
     log("pl=" .. (PLC and string.format("%x", PLC) or "nil"))
     if not PLC then step = 9 return end
@@ -18,7 +23,9 @@ function tick()
     last = 0
     beat = os.time()
     t0 = os.time()
-    log("hookm=" .. hookm(PLC, "UpdateKinematics", 2))
+    local r = hookm(PLC, "UpdateKinematics", 2)
+    log("hookm=" .. tostring(r))
+    if r ~= 1 then log("hookm fallo, sigo igual") end
     log("PROBE18 VIVO")
     return
   end
