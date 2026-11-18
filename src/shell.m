@@ -1,4 +1,4 @@
-// src/shell.m — VEEX build 112
+// src/shell.m — VEEX build 113
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
@@ -34,7 +34,7 @@ extern kern_return_t vm_region_64(vm_map_t target_task, vm_address_t *address,
                                   vm_region_info_t info, mach_msg_type_number_t *infoCnt,
                                   mach_port_t *object_name);
 
-#define VX_BUILD 112
+#define VX_BUILD 113
 #define VX_STAGE 0
 #define VX_BOOT 3
 #define VX_HOOKSET 0
@@ -728,8 +728,8 @@ static NSURLRequest *vxRewrite(NSURLRequest *req) {
 static NSURLSessionDataTask *h_dt(id self, SEL c, NSURLRequest *r, void (^cb)(NSData *, NSURLResponse *, NSError *)) {
     return o_dt ? o_dt(self, c, vxRewrite(r), cb) : nil;
 }
-static NSURLSessionUploadTask *h_ut(id id2, SEL c, NSURLRequest *r, NSData *d, void (^cb)(NSData *, NSURLResponse *, NSError *)) {
-    return o_ut ? o_ut(id2, c, vxRewrite(r), d, cb) : nil;
+static NSURLSessionUploadTask *h_ut(id self, SEL c, NSURLRequest *r, NSData *d, void (^cb)(NSData *, NSURLResponse *, NSError *)) {
+    return o_ut ? o_ut(self, c, vxRewrite(r), d, cb) : nil;
 }
 static void vxInstallBody(void) {
     Method m = class_getInstanceMethod([NSURLSession class], @selector(dataTaskWithRequest:completionHandler:));
@@ -1295,7 +1295,6 @@ static void vxWipe(void) {
     vxLog(@"[VEEX] WIPE inicio");
     NSString *bid = [[NSBundle mainBundle] bundleIdentifier];
     vxLog(@"[VEEX] bundle=%@", bid ?: @"nil");
-    vxLog(@"[VEEX] idfv=%@", [[[UIDevice currentDevice] identifierForVendor] UUIDString] ?: @"nil");
 
     NSArray *doms = @[ bid ?: @"", @"com.dts.freefireth", @"app.badger6804.pineapple6732" ];
     for (NSString *d in doms) {
@@ -1304,10 +1303,12 @@ static void vxWipe(void) {
         vxLog(@"[PF] dominio borrado %@", d);
     }
     [[NSUserDefaults standardUserDefaults] synchronize];
+    vxLog(@"[VEEX] prefs dominio ok");
 
     NSString *prefDir = [[gDocs stringByDeletingLastPathComponent] stringByAppendingPathComponent:@"Library/Preferences"];
+    NSArray *files = [[NSFileManager defaultManager] contentsOfDirectoryAtPath:prefDir error:NULL];
     int pfn = 0;
-    for (NSString *f in [[NSFileManager defaultManager] contentsOfDirectoryAtPath:prefDir error:NULL]) {
+    for (NSString *f in files) {
         if (![f.pathExtension isEqualToString:@"plist"]) continue;
         if ([[NSFileManager defaultManager] removeItemAtPath:[prefDir stringByAppendingPathComponent:f] error:NULL]) {
             pfn++; vxLog(@"[PF] %@", f);
@@ -1347,9 +1348,11 @@ static void vxWipe(void) {
 
 static void vxResetGuest(void) {
     vxLog(@"[VEEX] RESET armado");
-    [@"1" writeToFile:[gDocs stringByAppendingPathComponent:@"veex.reset"]
-           atomically:YES encoding:NSUTF8StringEncoding error:NULL];
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)),
+    NSString *flag = [gDocs stringByAppendingPathComponent:@"veex.reset"];
+    [@"1" writeToFile:flag atomically:YES encoding:NSUTF8StringEncoding error:NULL];
+    [[NSUserDefaults standardUserDefaults] synchronize];
+    vxLog(@"[VEEX] RESET escrito=%d", [[NSFileManager defaultManager] fileExistsAtPath:flag] ? 1 : 0);
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)),
                    dispatch_get_main_queue(), ^{ exit(0); });
 }
 
@@ -1888,20 +1891,37 @@ __attribute__((constructor)) static void vxInit(void) {
     vxRaw("=== build %d: constructor entra ===", VX_BUILD);
     if (!p_icache) p_icache = (void (*)(void *, size_t))dlsym(RTLD_DEFAULT, "sys_icache_invalidate");
     if (!p_jitwp) p_jitwp = (int (*)(int))dlsym(RTLD_DEFAULT, "pthread_jit_write_protect_np");
-    vxRaw("=== icache=%p jitwp=%p ===", p_icache, p_jitwp);
-    vxRaw("=== cave=%p prot=%x ===", gCavePad, vxProtOf((void *)gCavePad));
-    vxEnvProbe();
+    vxRaw("=== F1 icache=%p jitwp=%p ===", p_icache, p_jitwp);
+
+    @try { vxRaw("=== F2 cave=%p prot=%x ===", gCavePad, vxProtOf((void *)gCavePad)); }
+    @catch (NSException *e) { vxRaw("=== F2 EXC %s ===", e.reason.UTF8String ?: "?"); }
+
+    @try { vxEnvProbe(); } @catch (NSException *e) { vxRaw("=== F3 EXC %s ===", e.reason.UTF8String ?: "?"); }
+    vxRaw("=== F4 env fin ===");
+
     if (!gLog) gLog = [NSMutableString new];
     gDocs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
     vxLog(@"[VEEX] build %d boot=%d stage=%d", VX_BUILD, VX_BOOT, VX_STAGE);
-    vxRaw("=== constructor: docs=%@ ===", gDocs ?: @"nil");
+
+    NSString *lp = [gDocs stringByAppendingPathComponent:@"veex.log"];
+    NSDictionary *lat = [[NSFileManager defaultManager] attributesOfItemAtPath:lp error:NULL];
+    if ([[lat objectForKey:NSFileSize] unsignedLongLongValue] > 500000) {
+        [[NSFileManager defaultManager] removeItemAtPath:lp error:NULL];
+        vxRaw("=== log truncado ===");
+    }
+
+    NSString *bc = [gDocs stringByAppendingPathComponent:@"veex.boot"];
+    int nb = [[NSString stringWithContentsOfFile:bc encoding:NSUTF8StringEncoding error:NULL] intValue] + 1;
+    [@(nb).stringValue writeToFile:bc atomically:YES encoding:NSUTF8StringEncoding error:NULL];
+    vxRaw("=== F5 arranque #%d ===", nb);
 
     NSString *flag = [gDocs stringByAppendingPathComponent:@"veex.reset"];
     if ([[NSFileManager defaultManager] fileExistsAtPath:flag]) {
-        vxRaw("=== reset pendiente: wipe ===");
-        vxWipe();
+        vxRaw("=== F6 reset pendiente: borro bandera ===");
         [[NSFileManager defaultManager] removeItemAtPath:flag error:NULL];
-        vxRaw("=== wipe terminado ===");
+        vxRaw("=== F7 wipe empieza ===");
+        @try { vxWipe(); } @catch (NSException *e) { vxRaw("=== F7 EXC %s ===", e.reason.UTF8String ?: "?"); }
+        vxRaw("=== F8 wipe terminado ===");
     }
 
     gMainHdr = (uint64_t)_dyld_get_image_header(0);
@@ -1911,15 +1931,18 @@ __attribute__((constructor)) static void vxInit(void) {
         uint8_t *p = getsegmentdata((const struct mach_header_64 *)gMainHdr, "__TEXT", &sz);
         if (p && sz) { gTextLo = (uint64_t)p; gTextHi = (uint64_t)p + sz; gTextSz = sz; }
     }
+    vxRaw("=== F9 text lo=%llx hi=%llx ===", gTextLo, gTextHi);
 #if VX_BOOT >= 3
     dispatch_async(dispatch_get_main_queue(), ^{ boot(0.8); });
 #endif
+    vxRaw("=== FA ui programada ===");
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
         @autoreleasepool {
 #if VX_BOOT >= 2
             for (int i = 0; i < 60 && !gBase; i++) { vxFindImage(); if (!gBase) [NSThread sleepForTimeInterval:0.5]; }
-            vxLog(@"[VEEX] base=%llx", gBase);
+            vxRaw("=== FB base=%llx ===", gBase);
             for (int i = 0; i < 240 && !gI2C; i++) { vxLoadIL2CPP(); if (!gI2C) [NSThread sleepForTimeInterval:0.5]; }
+            vxRaw("=== FC il2cpp fin ===");
 #else
             vxLoadIL2CPP();
 #endif
@@ -1929,4 +1952,5 @@ __attribute__((constructor)) static void vxInit(void) {
     vxLog(@"[VEEX] solo prueba");
     vxProbeSelf();
 #endif
+    vxRaw("=== FD constructor sale ===");
 }
