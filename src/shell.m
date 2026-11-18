@@ -1,4 +1,4 @@
-// src/shell.m — VEEX build 117
+// src/shell.m — VEEX build 118
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
@@ -39,7 +39,7 @@ extern kern_return_t mach_vm_remap(vm_map_t target_task, uint64_t *address, uint
                                    uint64_t src_address, int copy, int *cur_protection,
                                    int *max_protection, int inheritance);
 
-#define VX_BUILD 117
+#define VX_BUILD 118
 #define VX_STAGE 0
 #define VX_BOOT 3
 #define VX_HOOKSET 0
@@ -265,88 +265,74 @@ static void vxEnvProbe(void) {
     CFRelease(t);
 }
 
-// Cueva ejecutable: mapeo privado del propio fichero firmado.
-// Las escrituras van a paginas COW, el fichero y su firma quedan intactos.
-static int vxMapPair(const char *path, uint64_t off) {
+// Un intento: mapear el fichero, elevar permisos y comprobar que se puede
+// escribir y ejecutar. shared=1 usa MAP_SHARED, initw=1 pide RW de entrada,
+// how=1 vm_protect maximo, how=2 mprotect, how=0 nada.
+static int vxMapTry(const char *path, uint64_t off, int shared, int initw, int how,
+                    uint8_t **outCave, void **outBase, size_t *outLen) {
     uint64_t pa = off & ~(uint64_t)(VX_PG - 1);
     size_t delta = (size_t)(off - pa);
     size_t len = (size_t)VX_PG * 2;
+    int prot = PROT_READ | PROT_EXEC | (initw ? PROT_WRITE : 0);
+    int flags = shared ? MAP_SHARED : MAP_PRIVATE;
     uint32_t nop = 0x1F2003D5;
-    uint8_t *cave = NULL;
-    void *keep = NULL;
 
     int fd = open(path, O_RDONLY);
-    vxLog(@"[VEEX] rwx open=%d e=%d", fd, errno);
-    if (fd < 0) return -1;
+    if (fd < 0) { vxLog(@"[VEEX] t%d open=%d e=%d", how + shared * 10, fd, errno); return -1; }
+    void *p = mmap(NULL, len, prot, flags, fd, (off_t)pa);
+    int em = errno;
+    vxLog(@"[VEEX] t%d sh=%d iw=%d p=%p e=%d", how, shared, initw, p, em);
+    if (p == MAP_FAILED) { close(fd); return -1; }
 
-    // A: RWX directo, privado.
-    void *p = mmap(NULL, len, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE, fd, (off_t)pa);
-    vxLog(@"[VEEX] rwx A=%p e=%d", p, errno);
-    if (p != MAP_FAILED) {
-        uint8_t *c = (uint8_t *)p + delta;
-        int a1 = vxProtOf(c);
-        vxLog(@"[VEEX] rwx A p=%x", a1);
-        if ((a1 & 7) == 7) { cave = c; keep = p; }
-        else if (a1 & VM_PROT_WRITE) {
-            memcpy(c, &nop, 4);
-            int a2 = vxProtOf(c);
-            vxLog(@"[VEEX] rwx A tras p=%x", a2);
-            if (a2 & VM_PROT_EXECUTE) { cave = c; keep = p; }
-        }
-        if (!cave) munmap(p, len);
+    uint8_t *c = (uint8_t *)p + delta;
+    int p0 = vxProtOf(c);
+    if (how == 1) {
+        kern_return_t k = vm_protect(mach_task_self(), (vm_address_t)p, (vm_size_t)len, TRUE,
+                                     VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXECUTE);
+        vxLog(@"[VEEX] t%d p0=%x vp=%d", how, p0, (int)k);
+    } else if (how == 2) {
+        int r = mprotect(p, len, PROT_READ | PROT_WRITE | PROT_EXEC);
+        vxLog(@"[VEEX] t%d p0=%x mp=%d", how, p0, r);
+    } else {
+        vxLog(@"[VEEX] t%d p0=%x", how, p0);
     }
 
-    // B: RX y añadir W con vm_protect en modo maximo + copia.
-    if (!cave) {
-        void *q = mmap(NULL, len, PROT_READ | PROT_EXEC, MAP_PRIVATE, fd, (off_t)pa);
-        vxLog(@"[VEEX] rwx B=%p e=%d", q, errno);
-        if (q != MAP_FAILED) {
-            uint8_t *c = (uint8_t *)q + delta;
-            int b1 = vxProtOf(c);
-            kern_return_t k = vm_protect(mach_task_self(), (vm_address_t)q, (vm_size_t)len, TRUE,
-                                         VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXECUTE | VM_PROT_COPY);
-            int b2 = vxProtOf(c);
-            vxLog(@"[VEEX] rwx B p=%x k=%d p2=%x", b1, (int)k, b2);
-            if (k == KERN_SUCCESS && (b2 & VM_PROT_WRITE)) {
-                memcpy(c, &nop, 4);
-                int b3 = vxProtOf(c);
-                vxLog(@"[VEEX] rwx B tras p=%x", b3);
-                if (b3 & VM_PROT_EXECUTE) { cave = c; keep = q; }
-            }
-            if (!cave) munmap(q, len);
-        }
-    }
+    int p1 = vxProtOf(c);
+    if (!(p1 & VM_PROT_WRITE)) { munmap(p, len); close(fd); return -1; }
 
-    // C: RW y añadir X con vm_protect en modo maximo.
-    if (!cave) {
-        void *s = mmap(NULL, len, PROT_READ | PROT_WRITE, MAP_PRIVATE, fd, (off_t)pa);
-        vxLog(@"[VEEX] rwx C=%p e=%d", s, errno);
-        if (s != MAP_FAILED) {
-            uint8_t *c = (uint8_t *)s + delta;
-            int c0 = vxProtOf(c);
-            kern_return_t k = vm_protect(mach_task_self(), (vm_address_t)s, (vm_size_t)len, TRUE,
-                                         VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXECUTE);
-            int c1 = vxProtOf(c);
-            vxLog(@"[VEEX] rwx C p=%x k=%d p2=%x", c0, (int)k, c1);
-            if (c1 & VM_PROT_WRITE) {
-                memcpy(c, &nop, 4);
-                int c2 = vxProtOf(c);
-                vxLog(@"[VEEX] rwx C tras p=%x", c2);
-                if (c2 & VM_PROT_EXECUTE) { cave = c; keep = s; }
-            }
-            if (!cave) munmap(s, len);
-        }
-    }
+    memcpy(c, &nop, 4);
+    int p2 = vxProtOf(c);
+    vxLog(@"[VEEX] t%d p1=%x tras=%x", how, p1, p2);
+    if (!(p2 & VM_PROT_EXECUTE)) { munmap(p, len); close(fd); return -1; }
 
     close(fd);
-    if (!cave) { vxLog(@"[VEEX] rwx sin cueva"); return -1; }
+    *outCave = c; *outBase = p; *outLen = len;
+    return 0;
+}
 
-    uint8_t t = cave[0];
-    cave[0] = 0xA5;
-    vxLog(@"[VEEX] rwx cueva=%p reflejo=%x", cave, cave[0]);
-    if (cave[0] != 0xA5) { cave[0] = t; munmap(keep, len); return -1; }
-    cave[0] = t;
+static int vxMapPair(const char *path, uint64_t off) {
+    uint8_t *cave = NULL;
+    void *base = NULL;
+    size_t len = 0;
 
+    if (vxMapTry(path, off, 1, 0, 0, &cave, &base, &len) == 0) goto ok;
+    if (vxMapTry(path, off, 1, 0, 1, &cave, &base, &len) == 0) goto ok;
+    if (vxMapTry(path, off, 1, 0, 2, &cave, &base, &len) == 0) goto ok;
+    if (vxMapTry(path, off, 0, 0, 1, &cave, &base, &len) == 0) goto ok;
+    if (vxMapTry(path, off, 0, 0, 2, &cave, &base, &len) == 0) goto ok;
+    if (vxMapTry(path, off, 0, 1, 1, &cave, &base, &len) == 0) goto ok;
+
+    vxLog(@"[VEEX] rwx sin cueva");
+    return -1;
+
+ok:
+    {
+        uint8_t t = cave[0];
+        cave[0] = 0xA5;
+        vxLog(@"[VEEX] rwx cueva=%p reflejo=%x", cave, cave[0]);
+        if (cave[0] != 0xA5) { cave[0] = t; munmap(base, len); return -1; }
+        cave[0] = t;
+    }
     gMapW = cave; gMapX = cave; gMapLeft = VX_CAVE_SZ;
     return 3;
 }
