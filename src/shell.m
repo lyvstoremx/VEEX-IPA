@@ -162,19 +162,15 @@ static const uint8_t gCavePad[VX_CAVE_SZ] = {0};
 
 static uint8_t *gCave = (uint8_t *)gCavePad;
 static size_t gCaveLeft = VX_CAVE_SZ;
-
 static uint8_t *gMapW = NULL;
 static uint8_t *gMapX = NULL;
 static size_t gMapLeft = 0;
 static int gMapMode = 0;
-
 static uint8_t gTrampBuf[VX_TRAMP_SZ] __attribute__((aligned(16)));
-
 static int gTrampSlot = 0;
 static int gHooked = 0;
 static void (*p_icache)(void *, size_t) = NULL;
 static int (*p_jitwp)(int) = NULL;
-
 static uint8_t *gTrP[VX_TR_MAX];
 static uint8_t *gTrW[VX_TR_MAX];
 static int gTrV[VX_TR_MAX];
@@ -573,7 +569,6 @@ static void vxHookName(const char *name, void *rep, void **origOut) {
     else vxLog(@"[VEEX] !%@ (%d)", @(name), r);
 }
 
-// Rebindeo propio: busca el puntero del simbolo en las tablas de cada imagen y lo escribe.
 static uint32_t (*r_count)(void) = NULL;
 static const void *(*r_hdr)(uint32_t) = NULL;
 static intptr_t (*r_slide)(uint32_t) = NULL;
@@ -752,7 +747,7 @@ static int h_sysctlbyname(const char *nm, void *o, size_t *ol, void *nw, size_t 
 static void vxCsLog(const char *tag) {
     uint32_t st = 0;
     int r = csops(getpid(), VX_CS_OPS_STATUS, &st, sizeof st);
-    vxLog(@"[VEEX] cs %s r=%d st=%x valid=%d", @(tag), r, st, (st & VX_CS_VALID) ? 1 : 0);
+    vxLog(@"[VEEX] cs %s r=%d st=%x valid=%d", tag, r, st, (st & VX_CS_VALID) ? 1 : 0);
 }
 
 static void vxInstallHooks(void) {
@@ -957,7 +952,6 @@ static f_att p_att; static f_p1 p_kl;
 static f_ns p_cns; static f_meths p_ml; static f_mname p_mn;
 static f_pc p_pc = NULL;
 static int gI2C = 0;
-
 static char gUnityPath[1024];
 
 static void vxFindUnityPath(void) {
