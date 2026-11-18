@@ -23,10 +23,9 @@ function tick()
     last = 0
     beat = os.time()
     t0 = os.time()
-    local r = hookm(PLC, "UpdateKinematics", 2)
-    log("hookm=" .. tostring(r))
-    if r ~= 1 then log("hookm fallo, sigo igual") end
-    log("PROBE18 VIVO")
+    log("hookm=" .. tostring(hookm(PLC, "UpdateKinematics", 2)))
+    log("h1=" .. tostring(hook1(m)))
+    log("PROBE19 VIVO")
     return
   end
 
