@@ -1,4 +1,4 @@
-// src/shell.m — VEEX build 110
+// src/shell.m — VEEX build 111
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
@@ -19,8 +19,10 @@
 #import <time.h>
 #import <unistd.h>
 #import <fcntl.h>
+#import <errno.h>
 #import <pthread.h>
 #import <sys/mman.h>
+#import <sys/stat.h>
 #import <sys/types.h>
 #import <sys/sysctl.h>
 #include "lua.h"
@@ -32,7 +34,7 @@ extern kern_return_t vm_region_64(vm_map_t target_task, vm_address_t *address,
                                   vm_region_info_t info, mach_msg_type_number_t *infoCnt,
                                   mach_port_t *object_name);
 
-#define VX_BUILD 110
+#define VX_BUILD 111
 #define VX_STAGE 0
 #define VX_BOOT 3
 #define VX_HOOKSET 0
@@ -270,6 +272,19 @@ static int vxCaveMap(void) {
     }
     const struct mach_header_64 *h = (const struct mach_header_64 *)di.dli_fbase;
     const struct load_command *lc = (const struct load_command *)(h + 1);
+
+    uint64_t tv = 0;
+    for (uint32_t i = 0; i < h->ncmds; i++) {
+        if (lc->cmd == LC_SEGMENT_64) {
+            const struct segment_command_64 *sg = (const struct segment_command_64 *)lc;
+            if (!strcmp(sg->segname, "__TEXT")) { tv = sg->vmaddr; break; }
+        }
+        lc = (const struct load_command *)((uint8_t *)lc + lc->cmdsize);
+    }
+    if (!tv) { vxLog(@"[VEEX] map sin text"); return -1; }
+    uint64_t slide = (uint64_t)h - tv;
+
+    lc = (const struct load_command *)(h + 1);
     uint64_t off = 0;
     for (uint32_t i = 0; i < h->ncmds; i++) {
         if (lc->cmd == LC_SEGMENT_64) {
@@ -277,7 +292,8 @@ static int vxCaveMap(void) {
             const struct section_64 *s = (const struct section_64 *)(sg + 1);
             for (uint32_t k = 0; k < sg->nsects; k++) {
                 if (!strcmp(s[k].sectname, "__vxcave")) {
-                    off = (uint64_t)s[k].offset + ((uint64_t)gCavePad - (sg->vmaddr + s[k].addr));
+                    uint64_t ra = slide + sg->vmaddr + s[k].addr;
+                    off = (uint64_t)s[k].offset + ((uint64_t)gCavePad - ra);
                     break;
                 }
             }
@@ -287,7 +303,13 @@ static int vxCaveMap(void) {
     if (!off) { vxLog(@"[VEEX] map sin seccion"); return -1; }
 
     int fd = open(di.dli_fname, O_RDONLY);
-    if (fd < 0) { vxLog(@"[VEEX] map open=%d", fd); return -1; }
+    if (fd < 0) { vxLog(@"[VEEX] map open=%d e=%d", fd, errno); return -1; }
+
+    struct stat st;
+    if (fstat(fd, &st) != 0) { vxLog(@"[VEEX] map fstat e=%d", errno); close(fd); return -1; }
+    vxLog(@"[VEEX] map off=%llx size=%llx", off, (uint64_t)st.st_size);
+    if (off >= (uint64_t)st.st_size) { vxLog(@"[VEEX] map off fuera"); close(fd); return -1; }
+
     uint64_t pa = off & ~(uint64_t)(VX_PG - 1);
     size_t delta = (size_t)(off - pa);
     size_t len = (size_t)VX_PG * 2;
@@ -302,15 +324,17 @@ static int vxCaveMap(void) {
             close(fd); return 1;
         }
         munmap(a, len);
-    } else vxLog(@"[VEEX] mapA fallo");
+    } else vxLog(@"[VEEX] mapA fallo e=%d", errno);
 
     void *mw = mmap(NULL, len, PROT_READ | PROT_WRITE, MAP_SHARED, fd, (off_t)pa);
+    int ew = errno;
     void *me = mmap(NULL, len, PROT_READ | PROT_EXEC, MAP_SHARED, fd, (off_t)pa);
+    int ex = errno;
     uint8_t *bw = mw == MAP_FAILED ? NULL : (uint8_t *)mw + delta;
     uint8_t *bx = me == MAP_FAILED ? NULL : (uint8_t *)me + delta;
     int pw = bw ? vxProtOf(bw) : -1;
     int pe = bx ? vxProtOf(bx) : -1;
-    vxLog(@"[VEEX] mapB w=%p pw=%x x=%p pe=%x", bw, pw, bx, pe);
+    vxLog(@"[VEEX] mapB w=%p pw=%x e=%d x=%p pe=%x e=%d", bw, pw, ew, bx, pe, ex);
     if (bw && bx && (pw & VM_PROT_WRITE) && (pe & VM_PROT_EXECUTE)) {
         gMapMode = 2; gMapW = bw; gMapX = bx; gMapLeft = VX_CAVE_SZ;
         close(fd); return 2;
@@ -356,9 +380,10 @@ static int vxTrampPrep(uint8_t **out) {
         uint8_t *c = gCave;
         uint64_t pg = (uint64_t)c & ~(uint64_t)(VX_PG - 1);
         uint64_t en = ((uint64_t)c + VX_SLOT + VX_PG - 1) & ~(uint64_t)(VX_PG - 1);
+        int pre = vxProtOf(c);
         int mp = mprotect((void *)pg, (size_t)(en - pg), PROT_READ | PROT_WRITE);
         int pw = vxProtOf(c);
-        vxLog(@"[VEEX] cave=%p mp=%d pw=%x", c, mp, pw);
+        vxLog(@"[VEEX] cave=%p pre=%x mp=%d pw=%x", c, pre, mp, pw);
         if (pw & VM_PROT_WRITE) { memset(c, 0, VX_SLOT); gCave += VX_SLOT; gCaveLeft -= VX_SLOT; tr = c; via = 5; }
     }
     if (!tr && p_jitwp) {
