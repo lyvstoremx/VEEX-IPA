@@ -1,4 +1,4 @@
-// src/shell.m — VEEX build 122
+// src/shell.m — VEEX build 123
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
@@ -28,6 +28,7 @@
 #include "lua.h"
 #include "lauxlib.h"
 #include "lualib.h"
+#include "fishhook.h"
 
 extern kern_return_t vm_region_64(vm_map_t target_task, vm_address_t *address,
                                   vm_size_t *size, vm_region_flavor_t flavor,
@@ -39,10 +40,10 @@ extern kern_return_t mach_vm_remap(vm_map_t target_task, uint64_t *address, uint
                                    uint64_t src_address, int copy, int *cur_protection,
                                    int *max_protection, int inheritance);
 
-#define VX_BUILD 122
+#define VX_BUILD 123
 #define VX_STAGE 0
 #define VX_BOOT 3
-#define VX_HOOKSET 0
+#define VX_HOOKSET 4
 #define VX_AUTOHOOK 0
 #define VX_FPS 20
 
@@ -441,10 +442,7 @@ static int vxTrampPrep(uint8_t **out) {
                        MAP_PRIVATE | MAP_ANON | MAP_JIT, -1, 0);
         int em = errno;
         vxLog(@"[VEEX] jit=%p e=%d", m, em);
-        if (m != MAP_FAILED) {
-            if (p_jitwp) p_jitwp(0);
-            tr = (uint8_t *)m; via = 2;
-        }
+        if (m != MAP_FAILED) { p_jitwp(0); tr = (uint8_t *)m; via = 2; }
     }
     if (!tr) {
         void *m = mmap(NULL, VX_PG, PROT_READ | PROT_WRITE,
@@ -574,6 +572,21 @@ static void vxHookName(const char *name, void *rep, void **origOut) {
     else vxLog(@"[VEEX] !%@ (%d)", @(name), r);
 }
 
+// Rebindeo por fishhook: no necesita memoria ejecutable.
+static void vxHookSym(const char *name, void *rep, void **origOut) {
+    char u[160];
+    snprintf(u, sizeof(u), "_%s", name);
+    struct rebinding rb;
+    rb.name = u;
+    rb.replacement = rep;
+    rb.replaced = origOut;
+    *origOut = NULL;
+    int r = rebind_symbols(&rb, 1);
+    if (r == 0 && *origOut) { gHooked++; vxLog(@"[VEEX] f+%@", @(name)); return; }
+    vxLog(@"[VEEX] f!%@ r=%d", @(name), r);
+    vxHookName(name, rep, origOut);
+}
+
 static unsigned char *(*o_md5)(const void *, CC_LONG, unsigned char *) = NULL;
 static unsigned char *(*o_sha1)(const void *, CC_LONG, unsigned char *) = NULL;
 static unsigned char *(*o_sha256)(const void *, CC_LONG, unsigned char *) = NULL;
@@ -679,9 +692,9 @@ static void vxInstallHooks(void) {
     if (!p_icache) p_icache = (void (*)(void *, size_t))dlsym(RTLD_DEFAULT, "sys_icache_invalidate");
 
 #if VX_HOOKSET >= 1
-    vxHookName("CC_MD5",    (void *)h_md5,    (void **)&o_md5);
-    vxHookName("CC_SHA1",   (void *)h_sha1,   (void **)&o_sha1);
-    vxHookName("CC_SHA256", (void *)h_sha256, (void **)&o_sha256);
+    vxHookSym("CC_MD5",    (void *)h_md5,    (void **)&o_md5);
+    vxHookSym("CC_SHA1",   (void *)h_sha1,   (void **)&o_sha1);
+    vxHookSym("CC_SHA256", (void *)h_sha256, (void **)&o_sha256);
 #endif
 #if VX_HOOKSET >= 2
     if (!p_security) p_security = dlopen("/System/Library/Frameworks/Security.framework/Security", RTLD_NOW);
@@ -699,14 +712,14 @@ static void vxInstallHooks(void) {
     }
 #endif
 #if VX_HOOKSET >= 3
-    vxHookName("_dyld_image_count",     (void *)h_dyld_image_count,     (void **)&o_dyld_image_count);
-    vxHookName("_dyld_get_image_name",  (void *)h_dyld_get_image_name,  (void **)&o_dyld_get_image_name);
-    vxHookName("_dyld_get_image_header",(void *)h_dyld_get_image_header,(void **)&o_dyld_get_image_header);
+    vxHookSym("_dyld_image_count",      (void *)h_dyld_image_count,     (void **)&o_dyld_image_count);
+    vxHookSym("_dyld_get_image_name",   (void *)h_dyld_get_image_name,  (void **)&o_dyld_get_image_name);
+    vxHookSym("_dyld_get_image_header", (void *)h_dyld_get_image_header,(void **)&o_dyld_get_image_header);
 #endif
 #if VX_HOOKSET >= 4
-    vxHookName("csops",        (void *)h_csops,        (void **)&o_csops);
-    vxHookName("sysctlbyname", (void *)h_sysctlbyname, (void **)&o_sysctlbyname);
-    vxHookName("sysctl",       (void *)h_sysctl,       (void **)&o_sysctl);
+    vxHookSym("csops",        (void *)h_csops,        (void **)&o_csops);
+    vxHookSym("sysctlbyname", (void *)h_sysctlbyname, (void **)&o_sysctlbyname);
+    vxHookSym("sysctl",       (void *)h_sysctl,       (void **)&o_sysctl);
 #endif
     if (!gMainHdr) gMainHdr = (uint64_t)_dyld_get_image_header(0);
     vxLog(@"[VEEX] hooked=%d idx=%u", gHooked, gMyIdx);
@@ -1602,7 +1615,6 @@ static int l_testtramp(lua_State *L) {
     return 1;
 }
 
-// Puntero de metodo: primera palabra del MethodInfo. Sin memoria ejecutable nueva.
 static int l_hookm(lua_State *L) {
     uint64_t kl = (uint64_t)luaL_checkinteger(L, 1);
     const char *nm = luaL_checkstring(L, 2);
