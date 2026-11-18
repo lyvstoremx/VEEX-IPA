@@ -1,4 +1,4 @@
-// src/shell.m — VEEX build 120
+// src/shell.m — VEEX build 121
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
@@ -39,7 +39,7 @@ extern kern_return_t mach_vm_remap(vm_map_t target_task, uint64_t *address, uint
                                    uint64_t src_address, int copy, int *cur_protection,
                                    int *max_protection, int inheritance);
 
-#define VX_BUILD 120
+#define VX_BUILD 121
 #define VX_STAGE 0
 #define VX_BOOT 3
 #define VX_HOOKSET 0
@@ -1944,8 +1944,9 @@ static void boot(double delay) {
         static int tries = 0;
         if (gWin) return;
         UIWindowScene *sc = nil;
-        for (UIScene *s in UIApplication.sharedApplication.connectedScenes)
-            if ([s isKindOfClass:[UIWindowScene] class]) { sc = (UIWindowScene *)s; break; }
+        for (UIScene *s in UIApplication.sharedApplication.connectedScenes) {
+            if ([s isKindOfClass:[UIWindowScene class]]) { sc = (UIWindowScene *)s; break; }
+        }
         if (sc) { buildUI(sc); vxRaw("=== UI montada ==="); return; }
         if (++tries > 15) { vxRaw("=== UI sin escena ==="); return; }
         boot(1.0);
