@@ -1,4 +1,4 @@
-// src/shell.m — VEEX build 119
+// src/shell.m — VEEX build 120
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
@@ -39,7 +39,7 @@ extern kern_return_t mach_vm_remap(vm_map_t target_task, uint64_t *address, uint
                                    uint64_t src_address, int copy, int *cur_protection,
                                    int *max_protection, int inheritance);
 
-#define VX_BUILD 119
+#define VX_BUILD 120
 #define VX_STAGE 0
 #define VX_BOOT 3
 #define VX_HOOKSET 0
@@ -1603,6 +1603,38 @@ static int l_testtramp(lua_State *L) {
     return 1;
 }
 
+// Puntero de metodo: primera palabra del MethodInfo. Sin memoria ejecutable nueva.
+static int l_hookm(lua_State *L) {
+    uint64_t kl = (uint64_t)luaL_checkinteger(L, 1);
+    const char *nm = luaL_checkstring(L, 2);
+    int argc = (int)luaL_optinteger(L, 3, 0);
+    gHarvestN = 0;
+    if (!gI2C || !kl) { lua_pushinteger(L, -1); return 1; }
+    void *m = vxMethodOf((void *)(uintptr_t)kl, nm, argc);
+    if (!m) { vxLog(@"[VEEX] pm sin metodo %s/%d", nm, argc); lua_pushinteger(L, -2); return 1; }
+    uint64_t *w = (uint64_t *)m;
+    vxLog(@"[VEEX] pm m=%p w=%llx %llx %llx", m, w[0], w[1], w[2]);
+    if (w[0] == (uint64_t)&h_harvest) { lua_pushinteger(L, 2); return 1; }
+    int p = vxProtOf((void *)w[0]);
+    vxLog(@"[VEEX] pm prot=%x", p);
+    if (!(p & VM_PROT_EXECUTE)) { lua_pushinteger(L, -3); return 1; }
+    uint64_t pg = (uint64_t)m & ~(uint64_t)(VX_PG - 1);
+    int r = mprotect((void *)pg, VX_PG, PROT_READ | PROT_WRITE);
+    vxLog(@"[VEEX] pm mp=%d e=%d", r, errno);
+    if (r != 0) {
+        kern_return_t k = vm_protect(mach_task_self(), pg, VX_PG, false,
+                                     VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY);
+        vxLog(@"[VEEX] pm vp=%d", (int)k);
+        if (k != KERN_SUCCESS) { lua_pushinteger(L, -4); return 1; }
+    }
+    gOrig1 = (void *)w[0];
+    w[0] = (uint64_t)&h_harvest;
+    vxFlush(m, 8);
+    vxLog(@"[VEEX] pm ok old=%p new=%p", gOrig1, (void *)&h_harvest);
+    lua_pushinteger(L, 1);
+    return 1;
+}
+
 static int l_hook1(lua_State *L) {
     uint64_t a = (uint64_t)luaL_checkinteger(L, 1);
     gHarvestN = 0;
@@ -1641,7 +1673,8 @@ static void vxRegister(lua_State *L) {
     lua_register(L, "fields", l_fields); lua_register(L, "parents", l_parents);
     lua_register(L, "statics", l_statics);
     lua_register(L, "sget", l_sget);
-    lua_register(L, "hook1", l_hook1); lua_register(L, "hv_count", l_hv_count);
+    lua_register(L, "hook1", l_hook1); lua_register(L, "hookm", l_hookm);
+    lua_register(L, "hv_count", l_hv_count);
     lua_register(L, "hv_get", l_hv_get); lua_register(L, "hv_clear", l_hv_clear);
     lua_register(L, "r64", l_r64);
     lua_register(L, "testret", l_testret);
@@ -1912,7 +1945,7 @@ static void boot(double delay) {
         if (gWin) return;
         UIWindowScene *sc = nil;
         for (UIScene *s in UIApplication.sharedApplication.connectedScenes)
-            if ([s isKindOfClass:[UIWindowScene class]]) { sc = (UIWindowScene *)s; break; }
+            if ([s isKindOfClass:[UIWindowScene] class]) { sc = (UIWindowScene *)s; break; }
         if (sc) { buildUI(sc); vxRaw("=== UI montada ==="); return; }
         if (++tries > 15) { vxRaw("=== UI sin escena ==="); return; }
         boot(1.0);
