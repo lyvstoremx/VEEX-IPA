@@ -1,4 +1,4 @@
-// src/shell.m — VEEX build 114
+// src/shell.m — VEEX build 115
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
@@ -39,7 +39,7 @@ extern kern_return_t mach_vm_remap(vm_map_t target_task, uint64_t *address, uint
                                    uint64_t src_address, int copy, int *cur_protection,
                                    int *max_protection, int inheritance);
 
-#define VX_BUILD 114
+#define VX_BUILD 115
 #define VX_STAGE 0
 #define VX_BOOT 3
 #define VX_HOOKSET 0
@@ -152,7 +152,7 @@ static const uint8_t gCavePad[VX_CAVE_SZ] = {0};
 static uint8_t *gCave = (uint8_t *)gCavePad;
 static size_t gCaveLeft = VX_CAVE_SZ;
 
-// Alias de fichero: uno ejecutable, otro escribible sobre la misma pagina.
+// Alias de fichero: uno escribible, otro ejecutable sobre la misma pagina.
 static uint8_t *gMapW = NULL;
 static uint8_t *gMapX = NULL;
 static size_t gMapLeft = 0;
@@ -265,7 +265,7 @@ static void vxEnvProbe(void) {
     CFRelease(t);
 }
 
-// Crea alias ejecutable + alias escribible del mismo offset de fichero.
+// Alias escribible + alias ejecutable del mismo offset de fichero.
 static int vxMapPair(const char *path, uint64_t off) {
     int fd = open(path, O_RDWR);
     int canw = (fd >= 0);
@@ -284,6 +284,7 @@ static int vxMapPair(const char *path, uint64_t off) {
     if (!(pe & VM_PROT_EXECUTE)) { munmap(me, len); close(fd); return -1; }
 
     uint8_t *bw = NULL;
+
     if (canw) {
         void *mw = mmap(NULL, len, PROT_READ | PROT_WRITE, MAP_SHARED, fd, (off_t)pa);
         if (mw != MAP_FAILED) {
@@ -301,16 +302,36 @@ static int vxMapPair(const char *path, uint64_t off) {
         vxLog(@"[VEEX] pair remap=%d", (int)k);
         if (k == KERN_SUCCESS) {
             uint8_t *t = (uint8_t *)na + delta;
-            int r2 = mprotect((uint8_t *)na, len, PROT_READ | PROT_WRITE);
+            kern_return_t k2 = vm_protect(mach_task_self(), na, len, TRUE,
+                                          VM_PROT_READ | VM_PROT_WRITE);
             int pw2 = vxProtOf(t);
-            vxLog(@"[VEEX] pair alias=%p mp=%d pw=%x", t, r2, pw2);
+            vxLog(@"[VEEX] pair A k2=%d pw=%x", (int)k2, pw2);
             if (pw2 & VM_PROT_WRITE) bw = t;
         }
     }
+
+    if (!bw) {
+        void *s2 = mmap(NULL, len, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE, fd, (off_t)pa);
+        if (s2 != MAP_FAILED) {
+            int p3 = vxProtOf((uint8_t *)s2 + delta);
+            uint64_t nb = 0; int cb = 0, mb = 0;
+            kern_return_t kb = mach_vm_remap(mach_task_self(), &nb, len, 0, VM_FLAGS_ANYWHERE,
+                                             mach_task_self(), (uint64_t)s2, 0, &cb, &mb, VM_INHERIT_NONE);
+            vxLog(@"[VEEX] pair B s2=%x remap=%d", p3, (int)kb);
+            if (kb == KERN_SUCCESS) {
+                uint8_t *tb = (uint8_t *)nb + delta;
+                int rb = mprotect((uint8_t *)nb, len, PROT_READ | PROT_EXEC);
+                int pb = vxProtOf(tb);
+                vxLog(@"[VEEX] pair B x=%p mp=%d px=%x", tb, rb, pb);
+                if (pb & VM_PROT_EXECUTE) { bw = (uint8_t *)s2 + delta; bx = tb; }
+            }
+        } else vxLog(@"[VEEX] pair B mmap e=%d", errno);
+    }
+
     if (!bw) { munmap(me, len); close(fd); return -1; }
 
     bw[0] = 0xA5;
-    vxLog(@"[VEEX] pair reflejo=%x", bx[0]);
+    vxLog(@"[VEEX] pair reflejo=%x w=%p x=%p", bx[0], bw, bx);
     if (bx[0] != (uint8_t)0xA5) { munmap(me, len); close(fd); return -1; }
 
     close(fd);
