@@ -1,4 +1,4 @@
-// src/shell.m — VEEX build 138
+// src/shell.m — VEEX build 139
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
@@ -39,7 +39,7 @@ extern kern_return_t mach_vm_remap(vm_map_t target_task, uint64_t *address, uint
                                    uint64_t src_address, int copy, int *cur_protection,
                                    int *max_protection, int inheritance);
 
-#define VX_BUILD 138
+#define VX_BUILD 139
 #define VX_STAGE 0
 #define VX_BOOT 3
 #define VX_HOOKSET 5
@@ -126,8 +126,8 @@ static void vxKeep(NSString *s) {
         "[VEEX] prep", "[VEEX] tramp", "[VEEX] cavex", "[VEEX] gcx", "[VEEX] xprot", "[VEEX] h1 ",
         "[VEEX] pm ", "[VEEX] slotx", "[VEEX] mp=", "[VEEX] patched", "[VEEX] revertido",
         "[VEEX] anonx", "[VEEX] jit=", "[VEEX] sin tramp", "[VEEX] hooked", "[VEEX] F2",
-        "[VEEX] w ", "[VEEX] wr", "[VEEX] bh", "[L] h1", "[L] n=", "[L] PROBE", "[L] VIVO",
-        "[L] pl=", "[L] m="
+        "[VEEX] w ", "[VEEX] wr", "[VEEX] xf", "[VEEX] xp=", "[VEEX] bh",
+        "[L] h1", "[L] n=", "[L] PROBE", "[L] VIVO", "[L] pl=", "[L] m="
     };
     const char *c = s.UTF8String;
     int hit = 0;
@@ -548,14 +548,20 @@ static int vxCaveGame(void *target, uint8_t **out) {
     uint64_t endp = ((uint64_t)c + VX_GNEED + VX_PG - 1) & ~(uint64_t)(VX_PG - 1);
     size_t span = (size_t)(endp - pg);
     int p0 = vxProtOf(c);
+
+    kern_return_t k0 = vm_protect(mach_task_self(), pg, span, TRUE,
+                                  VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXECUTE | VM_PROT_COPY);
     int mp = mprotect((void *)pg, span, PROT_READ | PROT_WRITE | PROT_EXEC);
     int p1 = vxProtOf(c);
-    vxLog(@"[VEEX] gc p0=%x mp=%d p1=%x", p0, mp, p1);
+    vxLog(@"[VEEX] gc p0=%x k0=%d mp=%d p1=%x", p0, (int)k0, mp, p1);
+
     if (!(p1 & VM_PROT_WRITE)) {
-        if (vm_protect(mach_task_self(), pg, span, false,
-                       VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY) != KERN_SUCCESS) return -18;
+        kern_return_t k1 = vm_protect(mach_task_self(), pg, span, TRUE,
+                                      VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY);
+        kern_return_t k2 = vm_protect(mach_task_self(), pg, span, FALSE,
+                                      VM_PROT_READ | VM_PROT_WRITE);
         p1 = vxProtOf(c);
-        vxLog(@"[VEEX] gc vp=%x", p1);
+        vxLog(@"[VEEX] gc vp=%x k1=%d k2=%d", p1, (int)k1, (int)k2);
         if (!(p1 & VM_PROT_WRITE)) return -19;
     }
     *out = c;
@@ -662,17 +668,23 @@ static int vxTrampExec(uint8_t *tr) {
     int p = vxProtOf(tr);
     if (via == 9) vxLog(@"[VEEX] gcx=%x", p);
     if (via == 7) vxLog(@"[VEEX] cavex=%x", p);
-    if (p & VM_PROT_EXECUTE) return 0;
+    if (p & VM_PROT_EXECUTE) { if (p_jitwp) p_jitwp(1); return 0; }
 
     uint64_t pg = (uint64_t)tr & ~(VX_PG - 1);
-    mprotect((void *)pg, VX_PG, PROT_READ | PROT_EXEC);
+    int m1 = mprotect((void *)pg, VX_PG, PROT_READ | PROT_EXEC);
     p = vxProtOf(tr);
     if (!(p & VM_PROT_EXECUTE)) {
-        vm_protect(mach_task_self(), pg, VX_PG, TRUE, VM_PROT_READ | VM_PROT_EXECUTE);
-        vm_protect(mach_task_self(), pg, VX_PG, FALSE, VM_PROT_READ | VM_PROT_EXECUTE);
+        kern_return_t ka = vm_protect(mach_task_self(), pg, VX_PG, TRUE,
+                                      VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXECUTE | VM_PROT_COPY);
+        kern_return_t kb = vm_protect(mach_task_self(), pg, VX_PG, FALSE,
+                                      VM_PROT_READ | VM_PROT_EXECUTE);
+        int m2 = mprotect((void *)pg, VX_PG, PROT_READ | PROT_EXEC);
+        p = vxProtOf(tr);
+        vxLog(@"[VEEX] xf m1=%d a=%d b=%d m2=%d", m1, (int)ka, (int)kb, m2);
         vxFlush(tr, VX_SLOT);
         p = vxProtOf(tr);
     }
+    if (p_jitwp) p_jitwp(1);
     vxLog(@"[VEEX] xp=%x", p);
     return (p & VM_PROT_EXECUTE) ? 0 : -12;
 }
@@ -729,6 +741,8 @@ static int vxInlineHook(void *target, void *rep, void **origOut) {
     uint64_t endp = ((uint64_t)target + 16 + VX_PG - 1) & ~(VX_PG - 1);
     size_t span = (size_t)(endp - start);
     if (span < VX_PG) span = VX_PG;
+    vm_protect(mach_task_self(), start, span, TRUE,
+               VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXECUTE | VM_PROT_COPY);
     int mp = mprotect((void *)start, span, PROT_READ | PROT_WRITE | PROT_EXEC);
     vxLog(@"[VEEX] mp=%d", mp);
     if (mp != 0) {
