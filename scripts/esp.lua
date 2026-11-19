@@ -1,11 +1,11 @@
--- PROBE39: caza del contenedor, validación corregida. Solo lectura.
+-- PROBE40: nivel 0 estáticos, nivel 1 campos. Solo lectura.
 local step, t0, beat = 0, os.time(), 0
 local PLC, cands, seen, vis = nil, {}, {}, {}
 local mejor, mejorP = nil, 0
-local lineas, sg = 0, 0
+local lineas = 0
 
 local function L(s)
-  if lineas >= 340 then return end
+  if lineas >= 400 then return end
   lineas = lineas + 1
   log(s)
 end
@@ -54,41 +54,54 @@ local function addI(o, off)
   cands[#cands + 1] = { st = 0, o = o, f = off }
 end
 
+local function campos(k, inst, tope)
+  local n = 0
+  for _, b in ipairs(fields(k)) do
+    local off, ty, nm = string.match(b, "^0x(%x+) (%S+) (%S+)$")
+    if off and ty and nm then
+      if col(ty) and esP(ty) then
+        L("I " .. nm .. " " .. b)
+        addI(inst, tonumber(off, 16))
+        n = n + 1
+      elseif n < tope and (col(ty) or objT(ty) or string.find(ty, "Transform")) then
+        L("f " .. b)
+        n = n + 1
+      end
+    end
+  end
+end
+
 local function mirar(k, inst, prof)
   if not k or k == 0 or prof > 1 then return end
   local clave = k + (inst and 1 or 0) * 0x100000000
   if vis[clave] then return end
   vis[clave] = true
 
-  if inst then
-    for _, b in ipairs(fields(k)) do
-      local off, ty, nm = string.match(b, "^0x(%x+) (%S+) (%S+)$")
-      if off and ty and col(ty) and esP(ty) then
-        L("I " .. nm .. " " .. b)
-        addI(inst, tonumber(off, 16))
-      end
-    end
-  end
-
-  for _, s in ipairs(statics(k)) do
-    if sg >= 400 then return end
-    local nm = string.match(s, "(%S+)$")
-    if nm and col(s) and esP(s) then
-      L("S " .. s)
-      addS(k, nm)
-    elseif nm and not col(s) and objT(s) then
-      sg = sg + 1
-      local o = sget(k, nm)
-      if o and o ~= 0 and plaus(o) then
-        local kk = kl(o)
-        if kk and kk ~= 0 and esClase(kk) then
-          L("hop " .. nm .. "=" .. hex(o) .. " k=" .. hex(kk))
-          mirar(kk, o, prof + 1)
-        else
-          L("skip " .. nm .. "=" .. hex(o) .. " k=" .. hex(kk))
+  if prof == 0 then
+    for _, s in ipairs(statics(k)) do
+      local nm = string.match(s, "(%S+)$")
+      if nm and col(s) and esP(s) then
+        L("S " .. s)
+        addS(k, nm)
+      elseif nm and not col(s) and objT(s) then
+        local o = sget(k, nm)
+        if o and o ~= 0 and plaus(o) then
+          local kk = kl(o)
+          if kk and kk ~= 0 and esClase(kk) then
+            L("hop " .. nm .. "=" .. hex(o) .. " k=" .. hex(kk))
+            mirar(kk, o, 1)
+          else
+            L("skip " .. nm .. "=" .. hex(o) .. " k=" .. hex(kk))
+          end
         end
       end
     end
+  else
+    local pp = parents(k)
+    local s = ""
+    for _, p in ipairs(pp) do s = s .. " " .. p end
+    L("cls " .. hex(k) .. " padre:" .. s)
+    campos(k, inst, 60)
   end
 end
 
@@ -100,7 +113,7 @@ function tick()
   local ahora = os.time()
   if ahora - beat >= 5 then
     beat = ahora
-    log("VIVO39 t=" .. (ahora - t0) .. " s=" .. step .. " c=" .. #cands .. " l=" .. lineas)
+    log("VIVO40 t=" .. (ahora - t0) .. " s=" .. step .. " c=" .. #cands .. " l=" .. lineas)
   end
 
   if step == 0 then
@@ -179,20 +192,8 @@ function tick()
         if o and o ~= 0 then kk = kl(o) end
         log("o[" .. i .. "]=" .. hex(o) .. " k=" .. hex(kk))
       end
-      local o0 = r64(it)
-      if o0 and o0 ~= 0 then
-        local kk = kl(o0)
-        if kk and kk ~= 0 then
-          local z = 0
-          for _, s in ipairs(fields(kk)) do
-            if z < 40 then log("FF " .. s) end
-            z = z + 1
-          end
-          log("FFn=" .. z)
-        end
-      end
     end
-    log("PROBE39 FIN")
+    log("PROBE40 FIN")
     step = 9
     return
   end
