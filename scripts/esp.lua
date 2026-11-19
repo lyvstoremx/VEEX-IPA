@@ -1,13 +1,15 @@
--- esp.lua V65
-log("V65 sw="..sw().." sh="..sh())
+-- esp.lua V66
+log("V66 sw="..sw().." sh="..sh())
 
 local ok = false
 local n = 0
 local arr = 0
 local hArr = 0
+local objP = 0
+local hP = 0
 local frame = 0
 local ticks = 0
-local mFOT, mGP, mGT, objP
+local mFOT, mGP, mGT
 
 local function boot_cfg()
   if ticks < 60 then return false end
@@ -43,7 +45,8 @@ local function setup()
   local fto = sym("il2cpp_type_get_object")
   if not (fct and fto) then log("sin type"); return end
 
-  objP = gch(call(fto, call(fct, kP)))
+  objP = call(fto, call(fct, kP))
+  hP = gch(objP)
   local objC = call(fto, call(fct, kM))
 
   mFOT = i2c_mptr(kO, "FindObjectsOfType", 1)
@@ -57,7 +60,7 @@ local function setup()
   if not (mFOT and mGT and mGP and mW and mP) then return end
 
   refresh()
-  log("n="..n)
+  log("n="..n.." h="..tostring(hP))
   if n <= 0 then return end
 
   local cam = 0
