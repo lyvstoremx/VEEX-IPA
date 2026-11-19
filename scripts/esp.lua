@@ -1,8 +1,7 @@
--- PROBE46: reset arreglado, posición por Transform.get_position
+-- PROBE47: busca el offset de posición comparando con la cámara
 local hecho = false
 local function hex(v) if not v then return "nil" end return string.format("%x", v) end
 local function plaus(p) return p and p > 4294967296 and p < 549755813888 and (p % 8) == 0 end
-
 local function esPlayer(k)
   for _, p in ipairs(parents(k)) do
     if string.find(p, "Player") then return true end
@@ -18,8 +17,7 @@ function tick()
   hecho = true
 
   local PLC = i2c_class("COW.GamePlay", "Player")
-  log("pl=" .. hex(PLC))
-  if not PLC then return end
+  if not PLC then log("sin clase") return end
   local to = call(sym("il2cpp_type_get_object"), call(sym("il2cpp_class_get_type"), PLC))
   local OK = i2c_class("UnityEngine", "Object")
   if not OK or not to then log("sin tipo") return end
@@ -39,28 +37,30 @@ function tick()
   log("alvo=" .. hex(alvo))
   if not alvo then return end
 
-  local tr = r64(alvo + 0x700)
-  log("tr=" .. hex(tr))
-  if tr and tr ~= 0 and plaus(tr) then
-    local gm = i2c_mptr(kl(tr), "get_position", 0)
-    log("gm=" .. hex(gm))
-    if gm and gm ~= 0 then
-      local x, y, z = pos3(gm, tr)
-      log("POS=" .. tostring(x) .. "," .. tostring(y) .. "," .. tostring(z))
-    end
-  end
-
-  log("v270=" .. tostring(rf(alvo + 0x270)) .. "," .. tostring(rf(alvo + 0x274)) .. "," .. tostring(rf(alvo + 0x278)))
-  log("v7e8=" .. tostring(rf(alvo + 0x7e8)) .. "," .. tostring(rf(alvo + 0x7ec)) .. "," .. tostring(rf(alvo + 0x7f0)))
-
   local cam = r64(alvo + 0x3e8)
-  log("cam=" .. hex(cam))
-  if cam and cam ~= 0 and plaus(cam) then
-    local cm = i2c_mptr(kl(cam), "get_position", 0)
-    if cm and cm ~= 0 then
-      local a, b, c = pos3(cm, cam)
-      log("CAMPOS=" .. tostring(a) .. "," .. tostring(b) .. "," .. tostring(c))
+  if not cam or cam == 0 or not plaus(cam) then log("sin cam") return end
+  local cm = i2c_mptr(kl(cam), "get_position", 0)
+  if not cm or cm == 0 then log("sin getpos") return end
+  local cx, cy, cz = pos3(cm, cam)
+  log("cam=" .. tostring(cx) .. "," .. tostring(cy) .. "," .. tostring(cz))
+
+  log("v320=" .. tostring(rf(alvo + 0x320)) .. "," .. tostring(rf(alvo + 0x324)) .. "," .. tostring(rf(alvo + 0x328)))
+  log("v344=" .. tostring(rf(alvo + 0x344)) .. "," .. tostring(rf(alvo + 0x348)) .. "," .. tostring(rf(alvo + 0x34c)))
+  log("v52c=" .. tostring(rf(alvo + 0x52c)) .. "," .. tostring(rf(alvo + 0x530)) .. "," .. tostring(rf(alvo + 0x534)))
+
+  local k = 0
+  for off = 0x10, 0x2600, 4 do
+    local x = rf(alvo + off)
+    local y = rf(alvo + off + 4)
+    local z = rf(alvo + off + 8)
+    if math.abs(x - cx) < 5000 and math.abs(y - cy) < 5000 and math.abs(z - cz) < 5000
+       and (math.abs(x) + math.abs(y) + math.abs(z)) > 1 then
+      k = k + 1
+      if k <= 12 then
+        log("hit 0x" .. string.format("%x", off) .. "=" .. tostring(x) .. "," .. tostring(y) .. "," .. tostring(z))
+      end
     end
   end
-  log("FIN46")
+  log("hits=" .. k)
+  log("FIN47")
 end
