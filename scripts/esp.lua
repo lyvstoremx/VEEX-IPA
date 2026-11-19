@@ -1,96 +1,104 @@
--- PROBE52: proyección por matrices
-local prep = false
-local camObj, TR, Cam, PLC = nil, nil, nil, nil
-local mW, mP, mGT, mGC = nil, nil, nil, nil
-local SW, SH = 0, 0
+-- esp.lua V53 — proyeccion en C
+log("V53 sw="..sw().." sh="..sh())
 
-local function hex(v) if not v then return "nil" end return string.format("%x", v) end
-local function plaus(p) return p and p > 4294967296 and p < 549755813888 and (p % 8) == 0 end
+if cfg("set.reset") == 1 then setcfg("set.reset", 0); reset() end
+if cfg("set.reload") == 1 then setcfg("set.reload", 0); reload(); return end
 
-local function mul(m, x, y, z, w)
-  local r = {}
-  for row = 0, 3 do
-    r[row] = m[row] * x + m[4 + row] * y + m[8 + row] * z + m[12 + row] * w
+local ok = false
+local n = 0
+local arr = 0
+local frame = 0
+local mFOT, mGC, mGP, objT
+
+local function setup()
+  if not i2c_ready() then log("sin il2cpp"); return end
+
+  local kP = i2c_class("COW.GamePlay", "Player")
+  local kO = i2c_class("UnityEngine", "Object")
+  local kT = i2c_class("UnityEngine", "Transform")
+  local kC = i2c_class("UnityEngine", "Component")
+  local kM = i2c_class("UnityEngine", "Camera")
+  log("k="..tostring(kP).." "..tostring(kM))
+  if not (kP and kO and kT and kC and kM) then return end
+
+  local fct = sym("il2cpp_class_get_type")
+  local fto = sym("il2cpp_type_get_object")
+  if not (fct and fto) then log("sin type"); return end
+
+  local objP = call(fto, call(fct, kP))
+  objT = call(fto, call(fct, kT))
+  local objC = call(fto, call(fct, kM))
+
+  mFOT = i2c_mptr(kO, "FindObjectsOfType", 1)
+  mGC = i2c_mptr(kC, "GetComponent", 1)
+  mGP = i2c_mptr(kT, "get_position", 0)
+  local mW = i2c_mptr(kM, "get_worldToCameraMatrix", 0)
+  local mP = i2c_mptr(kM, "get_projectionMatrix", 0)
+  log("m="..tostring(mFOT).." "..tostring(mGC).." "..tostring(mW).." "..tostring(mP))
+  if not (mFOT and mGC and mGP and mW and mP) then return end
+
+  arr = call(mFOT, objP)
+  n = arrlen(arr)
+  log("n="..n)
+  if n <= 0 then return end
+
+  local cam = 0
+  for i = 0, n - 1 do
+    local e = arrat(arr, i)
+    if e and e ~= 0 then
+      local mt = r64(e + 0x3e8)
+      if mt and mt ~= 0 then
+        local c = call(mGC, mt, objC)
+        if c and c ~= 0 then cam = c; break end
+      end
+    end
   end
-  return r
+  log("cam="..tostring(cam))
+  if cam == 0 then return end
+
+  if camset(mW, mP, cam) then
+    camupd()
+    matdump()
+    ok = true
+  end
 end
 
 function tick()
-  if cfg("set.reset") == 1 then setcfg("set.reset", 0) reset() end
-  if cfg("set.reload") == 1 then setcfg("set.reload", 0) reload() end
-  if not i2c_ready() then return end
-  if prep then return end
-  prep = true
+  if not ok then setup(); return end
 
-  SW, SH = sw(), sh()
-  log("V52 sw=" .. tostring(SW) .. " sh=" .. tostring(SH))
-  local fgt = sym("il2cpp_class_get_type")
-  local fob = sym("il2cpp_type_get_object")
-  local OK = i2c_class("UnityEngine", "Object")
-  Cam = i2c_class("UnityEngine", "Camera")
-  TR = i2c_class("UnityEngine", "Transform")
-  local Comp = i2c_class("UnityEngine", "Component")
-  PLC = i2c_class("COW.GamePlay", "Player")
-  if not OK or not Cam or not TR or not Comp or not PLC then log("clases mal") return end
-
-  mGT = i2c_mptr(Comp, "get_transform", 0)
-  mGC = i2c_mptr(Comp, "GetComponent", 1)
-  mW = i2c_mptr(Cam, "get_worldToCameraMatrix", 0)
-  mP = i2c_mptr(Cam, "get_projectionMatrix", 0)
-  log("mGT=" .. hex(mGT) .. " mGC=" .. hex(mGC) .. " mW=" .. hex(mW) .. " mP=" .. hex(mP))
-  if not mGT or not mGC or not mW or not mP then return end
-
-  local to = call(fob, call(fgt, PLC))
-  local pa = call(i2c_mptr(OK, "FindObjectsOfType", 1), to)
-  if not pa or not plaus(pa) then log("sin array") return end
-  local n = arrlen(pa)
-  log("n=" .. tostring(n))
+  frame = frame + 1
+  if frame % 5 == 1 then arr = call(mFOT, objP); n = arrlen(arr) end
+  camupd()
+  clear()
+  if cfg("esp.on") ~= 1 then return end
   if not n or n <= 0 then return end
 
-  local alvo = nil
-  for i = 0, math.min(n, 60) - 1 do
-    local o = arrat(pa, i)
-    if o and o ~= 0 then
-      for _, p in ipairs(parents(kl(o))) do
-        if string.find(p, "Player") then alvo = o break end
+  local w, h = sw(), sh()
+  local box = cfg("esp.box") == 1
+  local nm = cfg("esp.name") == 1
+  local ln = cfg("draw.line") == 1
+  local d = 0
+
+  for i = 0, n - 1 do
+    local e = arrat(arr, i)
+    if e and e ~= 0 then
+      local tr = call(mGC, e, objT)
+      if tr and tr ~= 0 then
+        local px, py, pz = gete(mGP, tr)
+        local fx, fy, fv = w2sm(px, py, pz)
+        local hx, hy, hv = w2sm(px, py + 180, pz)
+        if fv and hv then
+          d = d + 1
+          local bh = math.abs(fy - hy)
+          if bh < 10 then bh = 10 end
+          local bw = bh * 0.55
+          local cx = (fx + hx) * 0.5
+          if box then rect(cx - bw / 2, hy, bw, bh, 0.1, 0.95, 0.35, 1) end
+          if ln then line(cx, hy + bh, w / 2, h - 6, 0.95, 0.9, 0.15, 1) end
+          if nm then text("P"..i, cx - 9, hy - 13, 1, 1, 1, 1) end
+        end
       end
     end
-    if alvo then break end
   end
-  if not alvo then log("sin alvo") return end
-
-  local trc = r64(alvo + 0x3e8)
-  if not trc or not plaus(trc) or kl(trc) ~= TR then log("sin trc") return end
-  camObj = call(mGC, trc, call(fob, call(fgt, Cam)))
-  if not camObj or not plaus(camObj) or kl(camObj) ~= Cam then log("sin cam") return end
-
-  local vw = { mat(mW, camObj) }
-  local pm = { mat(mP, camObj) }
-  log("vw1=" .. tostring(vw[1]) .. " pm1=" .. tostring(pm[1]))
-  if not vw[1] or not pm[1] then return end
-
-  local tr = call(mGT, alvo)
-  if not tr or not plaus(tr) then log("sin tr") return end
-  local gm = i2c_mptr(TR, "get_position", 0)
-  if not gm then return end
-  local x, y, z = pos3(gm, tr)
-  log("pos=" .. tostring(x) .. "," .. tostring(y) .. "," .. tostring(z))
-  if not x then return end
-
-  local v = mul(vw, x, y, z, 1)
-  local c = mul(pm, v[0], v[1], v[2], v[3])
-  log("cw=" .. tostring(c[3]))
-  if not c[3] or c[3] <= 0 then log("detras") return end
-
-  local ndx = c[0] / c[3]
-  local ndy = c[1] / c[3]
-  local sx = (ndx * 0.5 + 0.5) * SW
-  local sy = (1 - (ndy * 0.5 + 0.5)) * SH
-  log("S=" .. tostring(sx) .. "," .. tostring(sy))
-
-  clear()
-  rect(sx - 20, sy - 80, 40, 80, 0, 1, 0.4, 1)
-  text("X", sx - 4, sy + 2, 1, 1, 1, 1)
-  log("DIBUJADO")
-  log("FIN52")
+  if frame % 20 == 0 then log("d="..d.."/"..n) end
 end
