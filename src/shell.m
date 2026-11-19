@@ -1,4 +1,4 @@
-// src/shell.m — VEEX build 143
+// src/shell.m — VEEX build 144
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
@@ -39,7 +39,7 @@ extern kern_return_t mach_vm_remap(vm_map_t target_task, uint64_t *address, uint
                                    uint64_t src_address, int copy, int *cur_protection,
                                    int *max_protection, int inheritance);
 
-#define VX_BUILD 143
+#define VX_BUILD 144
 #define VX_STAGE 0
 #define VX_BOOT 3
 #define VX_HOOKSET 5
@@ -126,9 +126,9 @@ static void vxKeep(NSString *s) {
         "[VEEX] prep", "[VEEX] tramp", "[VEEX] cavex", "[VEEX] gcx", "[VEEX] xprot", "[VEEX] h1 ",
         "[VEEX] pm ", "[VEEX] slotx", "[VEEX] mp=", "[VEEX] patched", "[VEEX] revertido",
         "[VEEX] anonx", "[VEEX] jit=", "[VEEX] sin tramp", "[VEEX] hooked", "[VEEX] F2",
-        "[VEEX] w ", "[VEEX] wr", "[VEEX] xf", "[VEEX] xp=", "[VEEX] bh",
+        "[VEEX] w ", "[VEEX] wr", "[VEEX] xf", "[VEEX] xp=", "[VEEX] bh", "[VEEX] scr=",
         "[L] h1", "[L] n=", "[L] PROBE", "[L] VIVO", "[L] pl=", "[L] m=",
-        "[L] V5", "[L] k=", "[L] cam=", "[L] d=", "[L] MW", "[L] MP", "[L] p=", "[L] first"
+        "[L] V5", "[L] V6", "[L] k=", "[L] cam=", "[L] d=", "[L] MW", "[L] MP", "[L] p=", "[L] f="
     };
     const char *c = s.UTF8String;
     int hit = 0;
@@ -1707,6 +1707,27 @@ static int vxProjOne(lua_State *L, int rowmaj) {
 static int l_w2sm(lua_State *L) { return vxProjOne(L, 0); }
 static int l_w2smr(lua_State *L) { return vxProjOne(L, 1); }
 
+static int l_w2smu(lua_State *L) {
+    float x = (float)luaL_checknumber(L, 1);
+    float y = (float)luaL_checknumber(L, 2);
+    float z = (float)luaL_checknumber(L, 3);
+    if (!gCamOK) { lua_pushnumber(L, 0); lua_pushnumber(L, 0); return 2; }
+    const float *V = gMW, *P = gMP;
+    float vx = V[0]*x + V[4]*y + V[8]*z + V[12];
+    float vy = V[1]*x + V[5]*y + V[9]*z + V[13];
+    float vz = V[2]*x + V[6]*y + V[10]*z + V[14];
+    float cx = P[0]*vx + P[4]*vy + P[8]*vz + P[12];
+    float cy = P[1]*vx + P[5]*vy + P[9]*vz + P[13];
+    float cw = P[3]*vx + P[7]*vy + P[11]*vz + P[15];
+    if (cw < 0.0001f) { lua_pushnumber(L, 0); lua_pushnumber(L, 0); return 2; }
+    float nx = cx / cw, ny = cy / cw;
+    CGFloat W = [UIScreen mainScreen].bounds.size.width;
+    CGFloat H = [UIScreen mainScreen].bounds.size.height;
+    lua_pushnumber(L, (nx * 0.5f + 0.5f) * W);
+    lua_pushnumber(L, (1.0f - (ny * 0.5f + 0.5f)) * H);
+    return 2;
+}
+
 static int l_w2smd(lua_State *L) {
     float x = (float)luaL_checknumber(L, 1);
     float y = (float)luaL_checknumber(L, 2);
@@ -2181,6 +2202,7 @@ static void vxRegister(lua_State *L) {
     lua_register(L, "camupd", l_camupd);
     lua_register(L, "w2sm", l_w2sm);
     lua_register(L, "w2smr", l_w2smr);
+    lua_register(L, "w2smu", l_w2smu);
     lua_register(L, "w2smd", l_w2smd);
     lua_register(L, "matdump", l_matdump);
 }
@@ -2215,10 +2237,19 @@ static void *vxRunThread(void *arg) {
     if (!n) { vxLog(@"[VEEX] RC ABORTO sin assemblies"); return NULL; }
 
     NSString *path = [gDocs stringByAppendingPathComponent:@"esp.lua"];
-    NSData *d = [NSData dataWithContentsOfURL:
+    NSMutableURLRequest *rq = [NSMutableURLRequest requestWithURL:
         [NSURL URLWithString:[SCRIPT_URL stringByAppendingFormat:@"?t=%d", (int)time(NULL)]]];
+    [rq setCachePolicy:NSURLRequestReloadIgnoringLocalAndRemoteCacheData];
+    [rq setValue:@"no-cache" forHTTPHeaderField:@"Cache-Control"];
+    [rq setValue:@"no-cache" forHTTPHeaderField:@"Pragma"];
+    NSURLResponse *rs = nil; NSError *er = nil;
+    NSData *d = [NSURLConnection sendSynchronousRequest:rq returningResponse:&rs error:&er];
     if (d.length > 100) [d writeToFile:path atomically:YES];
     else vxLog(@"[VEEX] sin red, uso copia local");
+    if (d.length > 20) {
+        NSData *hd = [d subdataWithRange:NSMakeRange(0, 20)];
+        vxLog(@"[VEEX] scr=%@", [[NSString alloc] initWithData:hd encoding:NSUTF8StringEncoding] ?: @"?");
+    }
     if (![[NSFileManager defaultManager] fileExistsAtPath:path]) { vxLog(@"[VEEX] RD falta esp.lua"); return NULL; }
 
     vxLog(@"[VEEX] RD lua state");
