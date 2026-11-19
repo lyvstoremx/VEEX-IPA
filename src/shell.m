@@ -1,4 +1,4 @@
-// src/shell.m — VEEX build 140
+// src/shell.m — VEEX build 141
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
@@ -39,7 +39,7 @@ extern kern_return_t mach_vm_remap(vm_map_t target_task, uint64_t *address, uint
                                    uint64_t src_address, int copy, int *cur_protection,
                                    int *max_protection, int inheritance);
 
-#define VX_BUILD 140
+#define VX_BUILD 141
 #define VX_STAGE 0
 #define VX_BOOT 3
 #define VX_HOOKSET 5
@@ -1625,12 +1625,14 @@ static int l_w2s(lua_State *L) {
     return 3;
 }
 
+typedef struct { float m[16]; } vx4x4;
 static int l_mat(lua_State *L) {
     uint64_t f = (uint64_t)luaL_checkinteger(L, 1);
     uint64_t o = (uint64_t)luaL_checkinteger(L, 2);
-    float m[16];
-    ((void (*)(float *, uint64_t))(uintptr_t)f)(m, o);
-    for (int i = 0; i < 16; i++) lua_pushnumber(L, m[i]);
+    vx4x4 r;
+    memset(&r, 0, sizeof r);
+    if (f) r = ((vx4x4 (*)(uint64_t))(uintptr_t)f)(o);
+    for (int i = 0; i < 16; i++) lua_pushnumber(L, r.m[i]);
     return 16;
 }
 
