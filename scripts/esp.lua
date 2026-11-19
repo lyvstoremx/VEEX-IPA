@@ -1,49 +1,102 @@
-local step, last, t0, beat, tot = 0, 0, os.time(), 0, 0
-local PLC = nil
+-- PROBE31: solo lectura, sin hooks
+local step, t0, beat = 0, os.time(), 0
+local PLC, L = nil, 0
+local cands = {}
+
+local function hex(v)
+  if not v then return "nil" end
+  return string.format("%x", v)
+end
+
+local function plaus(p)
+  if not p then return false end
+  return p > 4294967296 and p < 549755813888 and (p % 8) == 0
+end
 
 function tick()
   if cfg("set.reset") == 1 then setcfg("set.reset", 0) reset() end
   if cfg("set.reload") == 1 then setcfg("set.reload", 0) reload() end
   if not i2c_ready() then return end
 
-  if step == 0 then
-    step = 1
-    for _, n in ipairs({ "il2cpp_domain_get", "il2cpp_class_from_name",
-                         "il2cpp_class_get_method_from_name", "il2cpp_class_get_methods",
-                         "il2cpp_object_get_class", "il2cpp_field_get_offset" }) do
-      log("s " .. n .. "=" .. tostring(sym(n)))
-    end
-    PLC = i2c_class("COW.GamePlay", "Player")
-    log("pl=" .. (PLC and string.format("%x", PLC) or "nil"))
-    if not PLC then step = 9 return end
-    local m = i2c_mptr(PLC, "UpdateKinematics", 2)
-    log("m=" .. (m and string.format("%x", m) or "nil"))
-    if not m then step = 9 return end
-    hv_clear()
-    last = 0
-    beat = os.time()
-    t0 = os.time()
-    local r, op = hookm(PLC, "UpdateKinematics", 2)
-    log("hookm=" .. tostring(r) .. " op=" .. (op and string.format("%x", op) or "nil"))
-    log("h1=" .. tostring(hook1(op or m)))
-    log("PROBE30 VIVO")
-    return
-  end
-
-  if step ~= 1 then return end
   local ahora = os.time()
   if ahora - beat >= 5 then
     beat = ahora
-    log("VIVO t=" .. (ahora - t0) .. " n=" .. hv_count() .. " tot=" .. tot)
+    log("VIVO t=" .. (ahora - t0) .. " s=" .. step .. " L=" .. hex(L))
   end
-  local n = hv_count()
-  if n == last then return end
-  last = n
-  log("n=" .. n)
-  if n > 0 then
-    local o = hv_get(n - 1)
-    local k = o and kl(o) or 0
-    if k == PLC then tot = tot + 1 end
-    log("  cls=" .. string.format("%x", k) .. " acum=" .. tot)
+
+  if step == 0 then
+    step = 1
+    PLC = i2c_class("COW.GamePlay", "Player")
+    log("pl=" .. hex(PLC))
+    if not PLC then step = 9 return end
+
+    local n = 0
+    for _, s in ipairs(fields(PLC)) do log("f " .. s) n = n + 1 end
+    log("fn=" .. n)
+
+    local m = 0
+    for _, s in ipairs(parents(PLC)) do log("p " .. s) m = m + 1 end
+    log("pn=" .. m)
+
+    local k = 0
+    for _, s in ipairs(statics(PLC)) do
+      log("s " .. s)
+      k = k + 1
+      local nm = string.match(s, "(%S+)$")
+      if nm and (string.find(s, "List") or string.find(s, "HashSet") or string.find(s, "%[%]")) then
+        cands[#cands + 1] = nm
+      end
+    end
+    log("sn=" .. k .. " cand=" .. #cands)
+    step = 2
+    return
+  end
+
+  if step == 2 then
+    step = 3
+    for _, nm in ipairs(cands) do
+      local v = sget(PLC, nm)
+      log("g " .. nm .. "=" .. hex(v))
+      if v and v ~= 0 and L == 0 and plaus(v) then
+        L = v
+        log("ELEGIDO " .. nm)
+      end
+    end
+    if L == 0 then log("sin candidato") step = 9 return end
+
+    local tam = r32(L + 0x18)
+    if not tam or tam < 0 or tam > 400 then
+      log("tam raro " .. tostring(tam))
+      step = 9
+      return
+    end
+    log("tam=" .. tam)
+
+    local it = r64(L + 0x10)
+    log("items=" .. hex(it))
+    if not plaus(it) then log("items raro") step = 9 return end
+
+    local lim = tam
+    if lim > 5 then lim = 5 end
+    for i = 0, lim - 1 do
+      local o = r64(it + i * 8)
+      local kk = nil
+      if o and o ~= 0 then kk = kl(o) end
+      log("o[" .. i .. "]=" .. hex(o) .. " k=" .. hex(kk))
+    end
+
+    local o0 = r64(it)
+    if o0 and o0 ~= 0 then
+      local kk = kl(o0)
+      if kk and kk ~= 0 then
+        local z = 0
+        for _, s in ipairs(fields(kk)) do log("F " .. s) z = z + 1 end
+        log("Fn=" .. z)
+      end
+    end
+
+    log("PROBE31 FIN")
+    step = 9
+    return
   end
 end
