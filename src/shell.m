@@ -1,4 +1,4 @@
-// src/shell.m — VEEX build 130
+// src/shell.m — VEEX build 132
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
@@ -39,7 +39,7 @@ extern kern_return_t mach_vm_remap(vm_map_t target_task, uint64_t *address, uint
                                    uint64_t src_address, int copy, int *cur_protection,
                                    int *max_protection, int inheritance);
 
-#define VX_BUILD 130
+#define VX_BUILD 132
 #define VX_STAGE 0
 #define VX_BOOT 3
 #define VX_HOOKSET 5
@@ -119,6 +119,30 @@ static void vxWriteSync(NSString *s) {
     [f closeFile];
 }
 
+static void vxKeep(NSString *s) {
+    if (!gDocs) return;
+    static const char *tags[] = {
+        "=== build", "[VEEX] cs ", "[VEEX] cave", "[VEEX] amc", "[VEEX] amx",
+        "[VEEX] prep", "[VEEX] tramp", "[VEEX] cavex", "[VEEX] xprot", "[VEEX] h1 ",
+        "[VEEX] pm ", "[VEEX] slotx", "[VEEX] mp=", "[VEEX] patched", "[VEEX] revertido",
+        "[VEEX] anonx", "[VEEX] jit=", "[VEEX] sin tramp", "[VEEX] hooked", "[VEEX] F2",
+        "[VEEX] w ", "[VEEX] bh", "[L] h1", "[L] n=", "[L] PROBE", "[L] VIVO",
+        "[L] pl=", "[L] m="
+    };
+    const char *c = s.UTF8String;
+    int hit = 0;
+    for (unsigned i = 0; i < sizeof(tags) / sizeof(tags[0]); i++)
+        if (!strncmp(c, tags[i], strlen(tags[i]))) { hit = 1; break; }
+    if (!hit) return;
+    NSString *p = [gDocs stringByAppendingPathComponent:@"veex.last"];
+    NSFileHandle *f = [NSFileHandle fileHandleForWritingAtPath:p];
+    if (!f) { [s writeToFile:p atomically:YES encoding:NSUTF8StringEncoding error:NULL]; return; }
+    [f seekToEndOfFile];
+    [f writeData:[s dataUsingEncoding:NSUTF8StringEncoding]];
+    [f synchronizeFile];
+    [f closeFile];
+}
+
 static void vxLog(NSString *fmt, ...) {
     va_list ap; va_start(ap, fmt);
     NSString *s = [[NSString alloc] initWithFormat:fmt arguments:ap];
@@ -130,6 +154,7 @@ static void vxLog(NSString *fmt, ...) {
     if (gLog.length > 20000) [gLog deleteCharactersInRange:NSMakeRange(0, gLog.length - 16000)];
     NSString *line = [s stringByAppendingString:@"\n"];
     vxWriteSync(line);
+    vxKeep(line);
 
     double ahora = CFAbsoluteTimeGetCurrent();
     if (ahora - gLastPb > 0.4) {
@@ -155,7 +180,8 @@ static void vxHex(const char *hex, unsigned char *out, int len) {
 #define VX_TR_MAX      140
 #define VX_SLOT        128
 #define VX_TRAMP_SZ    (VX_TRAMP_SLOTS * VX_SLOT)
-#define VX_CAVE_SZ     4096
+#define VX_CAVE_SZ     8192
+#define VX_BH_MAX      4
 
 __attribute__((used, section("__TEXT,__vxcave")))
 static const uint8_t gCavePad[VX_CAVE_SZ] = {0};
@@ -176,6 +202,9 @@ static uint8_t *gTrP[VX_TR_MAX];
 static uint8_t *gTrW[VX_TR_MAX];
 static int gTrV[VX_TR_MAX];
 static int gTrN = 0;
+
+static uint64_t gBH[VX_BH_MAX][3];
+static volatile int gBHN = 0;
 
 static void vxEmitAbs(uint32_t *w, uint64_t v) {
     w[0] = 0x58000050;
@@ -421,25 +450,19 @@ static int vxCaveDirect(uint8_t **out) {
     uint64_t pg = (uint64_t)c & ~(uint64_t)(VX_PG - 1);
     uint64_t endp = ((uint64_t)c + VX_SLOT + VX_PG - 1) & ~(uint64_t)(VX_PG - 1);
     size_t span = (size_t)(endp - pg);
-    const int rwx = VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXECUTE;
+    const int rwx3 = VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXECUTE;
 
     int p0 = vxProtOf(c);
-    int mp = mprotect((void *)pg, span, PROT_READ | PROT_WRITE | PROT_EXEC);
+    kern_return_t k1 = vm_protect(mach_task_self(), pg, span, TRUE, rwx3);
+    kern_return_t k2 = vm_protect(mach_task_self(), pg, span, FALSE, rwx3 | VM_PROT_COPY);
     int p1 = vxProtOf(c);
-    vxLog(@"[VEEX] cave p0=%x mp=%d p1=%x", p0, mp, p1);
+    vxLog(@"[VEEX] cave p0=%x k1=%d k2=%d p1=%x", p0, (int)k1, (int)k2, p1);
 
-    if (!(p1 & VM_PROT_WRITE) || !(p1 & VM_PROT_EXECUTE)) {
-        kern_return_t k1 = vm_protect(mach_task_self(), pg, span, TRUE, rwx);
-        kern_return_t k2 = vm_protect(mach_task_self(), pg, span, FALSE, rwx);
+    if (!(p1 & VM_PROT_WRITE)) {
+        int mp = mprotect((void *)pg, span, PROT_READ | PROT_WRITE | PROT_EXEC);
         int p2 = vxProtOf(c);
-        vxLog(@"[VEEX] cave k1=%d k2=%d p2=%x", (int)k1, (int)k2, p2);
-        if (!(p2 & VM_PROT_WRITE)) {
-            kern_return_t k3 = vm_protect(mach_task_self(), pg, span, FALSE,
-                                          VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY);
-            int p3 = vxProtOf(c);
-            vxLog(@"[VEEX] cave cow k3=%d p3=%x", (int)k3, p3);
-            if (!(p3 & VM_PROT_WRITE)) return -16;
-        }
+        vxLog(@"[VEEX] cave mp=%d p2=%x", mp, p2);
+        if (!(p2 & VM_PROT_WRITE)) return -16;
     }
 
     memset(c, 0, VX_SLOT);
@@ -460,10 +483,22 @@ static int vxTrampPrep(uint8_t **out) {
         void *m = mmap(NULL, pgs, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
         if (m != MAP_FAILED) {
             kern_return_t k1 = vm_protect(mach_task_self(), (vm_address_t)m, pgs, TRUE, rwx3);
+            kern_return_t k2 = vm_protect(mach_task_self(), (vm_address_t)m, pgs, FALSE, rwx3 | VM_PROT_COPY);
+            int p = vxProtOf(m);
+            vxLog(@"[VEEX] amc k1=%d k2=%d p=%x", (int)k1, (int)k2, p);
+            if ((p & VM_PROT_WRITE) && (p & VM_PROT_EXECUTE)) { tr = (uint8_t *)m; via = 8; }
+            else munmap(m, pgs);
+        }
+    }
+
+    if (!tr) {
+        void *m = mmap(NULL, pgs, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+        if (m != MAP_FAILED) {
+            kern_return_t k1 = vm_protect(mach_task_self(), (vm_address_t)m, pgs, TRUE, rwx3);
             kern_return_t k2 = vm_protect(mach_task_self(), (vm_address_t)m, pgs, FALSE, rwx3);
             int p = vxProtOf(m);
             vxLog(@"[VEEX] amx k1=%d k2=%d p=%x", (int)k1, (int)k2, p);
-            if (k2 == KERN_SUCCESS && (p & VM_PROT_WRITE) && (p & VM_PROT_EXECUTE)) { tr = (uint8_t *)m; via = 4; }
+            if ((p & VM_PROT_WRITE) && (p & VM_PROT_EXECUTE)) { tr = (uint8_t *)m; via = 4; }
             else munmap(m, pgs);
         }
     }
@@ -574,6 +609,9 @@ static int vxInlineHook(void *target, void *rep, void **origOut) {
     vxLog(@"[VEEX] w %08x %08x %08x %08x", t[0], t[1], t[2], t[3]);
     for (int i = 0; i < 4; i++) if (vxBadInstr(t[i])) return -2 - i;
 
+    uint32_t orig[4];
+    memcpy(orig, t, 16);
+
     uint8_t *tr = NULL;
     int pr = vxTrampPrep(&tr);
     vxLog(@"[VEEX] prep=%d", pr);
@@ -606,14 +644,21 @@ static int vxInlineHook(void *target, void *rep, void **origOut) {
     patch[1] = 0xD61F0200;
     memcpy(patch + 2, &tr, 8);
 
-    *origOut = tr;
     memcpy(t, patch, 16);
-    vxLog(@"[VEEX] patched %08x", t[0]);
+    vxFlush(t, 16);
 
     int x1 = vxTrampExec(tr);
     vxLog(@"[VEEX] slotx=%d prot=%x", x1, vxProtOf(tr));
-    vxFlush(t, 16);
-    return x1;
+    if (x1 != 0) {
+        memcpy(t, orig, 16);
+        vxFlush(t, 16);
+        vxLog(@"[VEEX] revertido");
+        return x1;
+    }
+
+    *origOut = tr;
+    vxLog(@"[VEEX] patched %08x", t[0]);
+    return 0;
 }
 
 static void vxHookName(const char *name, void *rep, void **origOut) {
@@ -1688,6 +1733,76 @@ __attribute__((naked)) static void h_harvest(void) {
     );
 }
 
+#define VX_BSTUB(N, OFF) \
+__attribute__((naked, used)) static void vxB##N(void) { \
+    __asm__ volatile( \
+        "sub sp, sp, #160\n" \
+        "stp x0, x1, [sp, #0]\n" \
+        "stp x2, x3, [sp, #16]\n" \
+        "stp x4, x5, [sp, #32]\n" \
+        "stp x6, x7, [sp, #48]\n" \
+        "stp x29, x30, [sp, #64]\n" \
+        "str x8, [sp, #80]\n" \
+        "ldr x0, [sp, #0]\n" \
+        "bl _h_harvest_c\n" \
+        "ldp x0, x1, [sp, #0]\n" \
+        "ldp x2, x3, [sp, #16]\n" \
+        "ldp x4, x5, [sp, #32]\n" \
+        "ldp x6, x7, [sp, #48]\n" \
+        "ldp x29, x30, [sp, #64]\n" \
+        "ldr x8, [sp, #80]\n" \
+        "add sp, sp, #160\n" \
+        "adrp x9, _gBH@PAGE\n" \
+        "add x9, x9, #OFF\n" \
+        "ldr x10, [x9, #0]\n" \
+        "ubfx x11, x10, #10, #12\n" \
+        "ubfx x12, x10, #22, #1\n" \
+        "lsl x11, x11, x12\n" \
+        "sub sp, sp, x11\n" \
+        "ldr x9, [x9, #8]\n" \
+        "br x9\n" \
+    ); \
+}
+VX_BSTUB(0, 0)
+VX_BSTUB(1, 24)
+VX_BSTUB(2, 48)
+VX_BSTUB(3, 72)
+
+static const uintptr_t gStubTbl[VX_BH_MAX] = {
+    (uintptr_t)&vxB0, (uintptr_t)&vxB1, (uintptr_t)&vxB2, (uintptr_t)&vxB3
+};
+
+static int vxNearHook(void *target) {
+    if (!target) return -1;
+    if (gBHN >= VX_BH_MAX) return -20;
+    uint32_t *t = (uint32_t *)target;
+    uint32_t i0 = t[0];
+    if (vxBadInstr(i0)) return -21;
+    if ((i0 & 0xFFC003FF) != 0xD10003FF) return -22;
+
+    void *stub = (void *)gStubTbl[gBHN];
+    int64_t d = (int64_t)((uint8_t *)stub - (uint8_t *)target);
+    vxLog(@"[VEEX] bh d=%lld", d);
+    if (d & 3) return -23;
+    if (d < -(1LL << 27) || d >= (1LL << 27)) return -24;
+
+    uint64_t pg = (uint64_t)target & ~(uint64_t)(VX_PG - 1);
+    int mp = mprotect((void *)pg, VX_PG, PROT_READ | PROT_WRITE | PROT_EXEC);
+    if (mp != 0) {
+        if (vm_protect(mach_task_self(), pg, VX_PG, false,
+                       VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY) != KERN_SUCCESS) return -25;
+    }
+
+    int idx = gBHN++;
+    gBH[idx][0] = (uint64_t)i0;
+    gBH[idx][1] = (uint64_t)target + 4;
+    uint32_t bl = 0x94000000u | (uint32_t)((d >> 2) & 0x03FFFFFF);
+    t[0] = bl;
+    vxFlush(t, 4);
+    vxLog(@"[VEEX] bh ok %08x", bl);
+    return 0;
+}
+
 static int l_testret(lua_State *L) {
     uint8_t *tr = NULL;
     vxLog(@"[VEEX] ref=%x", vxProtOf((void *)h_harvest_c));
@@ -1784,7 +1899,12 @@ static int l_hook1(lua_State *L) {
     gHarvestN = 0;
     if (!a) { lua_pushinteger(L, -1); return 1; }
     if (!p_icache) p_icache = (void (*)(void *, size_t))dlsym(RTLD_DEFAULT, "sys_icache_invalidate");
-    int r = vxInlineHook((void *)(uintptr_t)a, (void *)h_harvest, &gOrig1);
+    int r = vxNearHook((void *)(uintptr_t)a);
+    vxLog(@"[VEEX] bh r=%d", r);
+    if (r != 0) {
+        vxLog(@"[VEEX] bh fallo, paso a inline");
+        r = vxInlineHook((void *)(uintptr_t)a, (void *)h_harvest, &gOrig1);
+    }
     vxLog(@"[VEEX] h1 a=%llx r=%d", a, r);
     lua_pushinteger(L, r);
     return 1;
@@ -2132,6 +2252,15 @@ __attribute__((constructor)) static void vxInit(void) {
     if (!gLog) gLog = [NSMutableString new];
     gDocs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
     vxLog(@"[VEEX] build %d boot=%d stage=%d", VX_BUILD, VX_BOOT, VX_STAGE);
+
+    NSString *lastp = [gDocs stringByAppendingPathComponent:@"veex.last"];
+    NSString *last = [NSString stringWithContentsOfFile:lastp encoding:NSUTF8StringEncoding error:NULL];
+    if (last.length) {
+        [gLog appendString:@"--- ultimo run ---\n"];
+        [gLog appendString:last];
+        [[NSFileManager defaultManager] removeItemAtPath:lastp error:NULL];
+        vxRaw("=== last cargado %lu ===", (unsigned long)last.length);
+    }
 
     NSString *lp = [gDocs stringByAppendingPathComponent:@"veex.log"];
     NSDictionary *lat = [[NSFileManager defaultManager] attributesOfItemAtPath:lp error:NULL];
