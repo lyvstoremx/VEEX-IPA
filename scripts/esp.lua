@@ -1,5 +1,5 @@
--- esp.lua V70
-log("V70 sw="..sw().." sh="..sh())
+-- esp.lua V71
+log("V71 sw="..sw().." sh="..sh())
 
 local ok = false
 local n = 0
@@ -7,12 +7,14 @@ local arr = 0
 local hArr = 0
 local objP = 0
 local hP = 0
+local klP = 0
 local camE = 0
 local hCam = 0
 local frame = 0
 local ticks = 0
 local lastTry = -999
 local mFOT, mGP, mGT
+local offs = {}
 
 local function boot_cfg()
   if ticks < 60 then return false end
@@ -41,6 +43,54 @@ local function refresh()
   n = arrlen(arr)
 end
 
+local function scanName(kl, out)
+  local fl = fields(kl)
+  if not fl then return end
+  for i = 1, #fl do
+    local s = fl[i]
+    local off = s:match("^(0x%x+)")
+    local tn = s:match("^0x%x+ (%S+)")
+    local nm = s:match("^0x%x+ %S+ (.+)$")
+    if off and tn and nm then
+      local lo = nm:lower()
+      if tn:find("String") and (lo:find("name") or lo:find("nick")) then
+        out[#out + 1] = tonumber(off)
+      end
+    end
+  end
+end
+
+local function findNames()
+  offs = {}
+  scanName(klP, offs)
+  local k2 = i2c_class("COW.GamePlay", "PlayerInfo")
+  if k2 then scanName(k2, offs) end
+  local ps = parents(klP)
+  if ps then
+    for i = 1, #ps do
+      local ns, nm = ps[i]:match("^(.-)::(.+)$")
+      if nm and ns and ns ~= "-" then
+        local k = i2c_class(ns, nm)
+        if k then scanName(k, offs) end
+      end
+    end
+  end
+  local t = {}
+  for i = 1, #offs do t[#t + 1] = string.format("0x%x", offs[i]) end
+  log("nameoffs="..tostring(#offs).." ["..table.concat(t, " ").."]")
+end
+
+local function nameOf(e)
+  for i = 1, #offs do
+    local sp = r64(e + offs[i])
+    if sp and sp ~= 0 then
+      local s = str(sp)
+      if s and #s > 0 and #s < 24 and s:find("[%w_]") then return s end
+    end
+  end
+  return nil
+end
+
 local function setup()
   if ticks - lastTry < 20 then return end
   lastTry = ticks
@@ -60,6 +110,7 @@ local function setup()
   local fto = sym("il2cpp_type_get_object")
   if not (fct and fto) then log("sin type"); return end
 
+  klP = kP
   objP = call(fto, call(fct, kP))
   hP = gch(objP)
   local objC = call(fto, call(fct, kM))
@@ -72,6 +123,8 @@ local function setup()
   local mP = i2c_mptr(kM, "get_projectionMatrix", 0)
   log("m="..tostring(mFOT).." "..tostring(mGT).." "..tostring(mW).." "..tostring(mP))
   if not (mFOT and mGT and mGP and mW and mP) then return end
+
+  findNames()
 
   refresh()
   log("n="..n)
@@ -172,7 +225,10 @@ function tick()
                 local by = sy - bh
                 if box then rect(sx - bw / 2, by, bw, bh, 1, 0.15, 0.15, 1) end
                 if ln then line(sx, by, w / 2 - sx, -by, 1, 1, 1, 0.85) end
-                if nm then text("P"..i, sx - 9, by - 13, 1, 1, 1, 1) end
+                if nm then
+                  local s = nameOf(e)
+                  if s then text(s, sx - #s * 3, by - 13, 1, 1, 1, 1) end
+                end
               end
             end
           end
