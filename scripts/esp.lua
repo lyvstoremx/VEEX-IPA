@@ -1,17 +1,18 @@
--- PROBE38: caza del contenedor, con validación de clase. Solo lectura.
+-- PROBE39: caza del contenedor, validación corregida. Solo lectura.
 local step, t0, beat = 0, os.time(), 0
 local PLC, cands, seen, vis = nil, {}, {}, {}
 local mejor, mejorP = nil, 0
 local lineas, sg = 0, 0
 
 local function L(s)
-  if lineas >= 320 then return end
+  if lineas >= 340 then return end
   lineas = lineas + 1
   log(s)
 end
 
 local function hex(v) if not v then return "nil" end return string.format("%x", v) end
-local function plaus(p) if not p then return false end return p > 4294967296 and p < 549755813888 and (p % 8) == 0 end
+local function rango(p) return p and p > 4294967296 and p < 549755813888 end
+local function plaus(p) return rango(p) and (p % 8) == 0 end
 local function col(s) return string.find(s, "List") or string.find(s, "HashSet") or string.find(s, "Dictionary") or string.find(s, "%[%]") end
 local function esP(s)
   return string.find(s, "GamePlay.Player") or string.find(s, "ReplicationEntity") or string.find(s, "AttackableEntity")
@@ -23,13 +24,16 @@ local function objT(s)
 end
 
 local function esClase(k)
-  if not plaus(k) then return false end
+  if not rango(k) then return false end
   local np = r64(k + 0x10)
-  if not plaus(np) then return false end
+  if not rango(np) then return false end
   local c = r32(np)
   if not c then return false end
-  local b = c % 256
-  return b >= 32 and b <= 126
+  local b0 = c % 256
+  local b1 = math.floor(c / 256) % 256
+  if b0 < 65 or b0 > 122 then return false end
+  if b1 == 95 or b1 == 60 or b1 == 48 then return true end
+  return (b1 >= 65 and b1 <= 90) or (b1 >= 97 and b1 <= 122)
 end
 
 local function esPlayer(k)
@@ -52,7 +56,6 @@ end
 
 local function mirar(k, inst, prof)
   if not k or k == 0 or prof > 1 then return end
-  if not esClase(k) then return end
   local clave = k + (inst and 1 or 0) * 0x100000000
   if vis[clave] then return end
   vis[clave] = true
@@ -90,7 +93,6 @@ local function mirar(k, inst, prof)
 end
 
 function tick()
-  log("V38")
   if cfg("set.reset") == 1 then setcfg("set.reset", 0) reset() end
   if cfg("set.reload") == 1 then setcfg("set.reload", 0) reload() end
   if not i2c_ready() then return end
@@ -98,7 +100,7 @@ function tick()
   local ahora = os.time()
   if ahora - beat >= 5 then
     beat = ahora
-    log("VIVO38 t=" .. (ahora - t0) .. " s=" .. step .. " c=" .. #cands .. " l=" .. lineas)
+    log("VIVO39 t=" .. (ahora - t0) .. " s=" .. step .. " c=" .. #cands .. " l=" .. lineas)
   end
 
   if step == 0 then
@@ -190,7 +192,7 @@ function tick()
         end
       end
     end
-    log("PROBE38 FIN")
+    log("PROBE39 FIN")
     step = 9
     return
   end
