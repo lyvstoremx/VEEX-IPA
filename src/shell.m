@@ -1,4 +1,4 @@
-// src/shell.m — VEEX build 132
+// src/shell.m — VEEX build 133
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
@@ -39,7 +39,7 @@ extern kern_return_t mach_vm_remap(vm_map_t target_task, uint64_t *address, uint
                                    uint64_t src_address, int copy, int *cur_protection,
                                    int *max_protection, int inheritance);
 
-#define VX_BUILD 132
+#define VX_BUILD 133
 #define VX_STAGE 0
 #define VX_BOOT 3
 #define VX_HOOKSET 5
@@ -122,8 +122,8 @@ static void vxWriteSync(NSString *s) {
 static void vxKeep(NSString *s) {
     if (!gDocs) return;
     static const char *tags[] = {
-        "=== build", "[VEEX] cs ", "[VEEX] cave", "[VEEX] amc", "[VEEX] amx",
-        "[VEEX] prep", "[VEEX] tramp", "[VEEX] cavex", "[VEEX] xprot", "[VEEX] h1 ",
+        "=== build", "[VEEX] cs ", "[VEEX] cave", "[VEEX] gc", "[VEEX] amc", "[VEEX] amx",
+        "[VEEX] prep", "[VEEX] tramp", "[VEEX] cavex", "[VEEX] gcx", "[VEEX] xprot", "[VEEX] h1 ",
         "[VEEX] pm ", "[VEEX] slotx", "[VEEX] mp=", "[VEEX] patched", "[VEEX] revertido",
         "[VEEX] anonx", "[VEEX] jit=", "[VEEX] sin tramp", "[VEEX] hooked", "[VEEX] F2",
         "[VEEX] w ", "[VEEX] bh", "[L] h1", "[L] n=", "[L] PROBE", "[L] VIVO",
@@ -182,6 +182,7 @@ static void vxHex(const char *hex, unsigned char *out, int len) {
 #define VX_TRAMP_SZ    (VX_TRAMP_SLOTS * VX_SLOT)
 #define VX_CAVE_SZ     8192
 #define VX_BH_MAX      4
+#define VX_GNEED       192
 
 __attribute__((used, section("__TEXT,__vxcave")))
 static const uint8_t gCavePad[VX_CAVE_SZ] = {0};
@@ -446,6 +447,53 @@ static void vxSlotWrite(uint8_t *tr, const void *src, size_t n) {
     memcpy(tr, src, n);
 }
 
+static int vxIsPad(uint64_t a, size_t n) {
+    const uint32_t *p = (const uint32_t *)a;
+    for (size_t i = 0; i < n / 4; i++) {
+        uint32_t v = p[i];
+        if (v != 0 && v != 0x1F2003D5) return 0;
+    }
+    return 1;
+}
+
+static uint8_t *vxFindCave(uint64_t near) {
+    if (!gBase || gSize < VX_GNEED) return NULL;
+    uint64_t lo = gBase + 0x1000;
+    uint64_t hi = gBase + gSize - VX_GNEED;
+    if (near < lo || near > hi) return NULL;
+    for (uint64_t d = 0x40; d < 0x600000; d += 4) {
+        uint64_t a = near + d;
+        if (a < hi && vxIsPad(a, VX_GNEED)) return (uint8_t *)a;
+        if (near > d) {
+            uint64_t b = near - d;
+            if (b > lo && vxIsPad(b, VX_GNEED)) return (uint8_t *)b;
+        }
+    }
+    return NULL;
+}
+
+static int vxCaveGame(uint64_t near, uint8_t **out) {
+    uint8_t *c = vxFindCave(near);
+    vxLog(@"[VEEX] gc c=%p", c);
+    if (!c) return -17;
+    uint64_t pg = (uint64_t)c & ~(uint64_t)(VX_PG - 1);
+    uint64_t endp = ((uint64_t)c + VX_GNEED + VX_PG - 1) & ~(uint64_t)(VX_PG - 1);
+    size_t span = (size_t)(endp - pg);
+    int p0 = vxProtOf(c);
+    int mp = mprotect((void *)pg, span, PROT_READ | PROT_WRITE | PROT_EXEC);
+    int p1 = vxProtOf(c);
+    vxLog(@"[VEEX] gc p0=%x mp=%d p1=%x", p0, mp, p1);
+    if (!(p1 & VM_PROT_WRITE)) {
+        if (vm_protect(mach_task_self(), pg, span, false,
+                       VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY) != KERN_SUCCESS) return -18;
+        p1 = vxProtOf(c);
+        vxLog(@"[VEEX] gc vp=%x", p1);
+        if (!(p1 & VM_PROT_WRITE)) return -19;
+    }
+    *out = c;
+    return 0;
+}
+
 static int vxCaveDirect(uint8_t **out) {
     if (gCaveLeft < VX_SLOT) return -15;
     uint8_t *c = gCaveCur;
@@ -473,15 +521,29 @@ static int vxCaveDirect(uint8_t **out) {
     return 0;
 }
 
-static int vxTrampPrep(uint8_t **out) {
+static int vxTrampPrep(uint8_t **out, uint64_t near) {
     if (gTrN >= VX_TR_MAX) return -9;
 
     uint8_t *tr = NULL;
     int via = -1;
-    vm_size_t pgs = (vm_size_t)VX_PG;
-    const int rwx3 = VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXECUTE;
 
-    {
+    if (near) {
+        int r = vxCaveGame(near, &tr);
+        vxLog(@"[VEEX] gcr=%d", r);
+        if (r == 0) via = 9;
+        else tr = NULL;
+    }
+
+    if (!tr) {
+        int r = vxCaveDirect(&tr);
+        vxLog(@"[VEEX] cave r=%d", r);
+        if (r == 0) via = 7;
+        else tr = NULL;
+    }
+
+    if (!tr) {
+        vm_size_t pgs = (vm_size_t)VX_PG;
+        const int rwx3 = VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXECUTE;
         void *m = mmap(NULL, pgs, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
         if (m != MAP_FAILED) {
             kern_return_t k1 = vm_protect(mach_task_self(), (vm_address_t)m, pgs, TRUE, rwx3);
@@ -494,25 +556,7 @@ static int vxTrampPrep(uint8_t **out) {
     }
 
     if (!tr) {
-        void *m = mmap(NULL, pgs, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
-        if (m != MAP_FAILED) {
-            kern_return_t k1 = vm_protect(mach_task_self(), (vm_address_t)m, pgs, TRUE, rwx3);
-            kern_return_t k2 = vm_protect(mach_task_self(), (vm_address_t)m, pgs, FALSE, rwx3);
-            int p = vxProtOf(m);
-            vxLog(@"[VEEX] amx k1=%d k2=%d p=%x", (int)k1, (int)k2, p);
-            if ((p & VM_PROT_WRITE) && (p & VM_PROT_EXECUTE)) { tr = (uint8_t *)m; via = 4; }
-            else munmap(m, pgs);
-        }
-    }
-
-    if (!tr) {
-        int r = vxCaveDirect(&tr);
-        vxLog(@"[VEEX] cave r=%d", r);
-        if (r == 0) via = 7;
-        else tr = NULL;
-    }
-
-    if (!tr) {
+        vm_size_t pgs = (vm_size_t)VX_PG;
         void *m = mmap(NULL, pgs, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_ANON, -1, 0);
         if (m != MAP_FAILED) {
             int p = vxProtOf(m);
@@ -521,20 +565,7 @@ static int vxTrampPrep(uint8_t **out) {
             else munmap(m, pgs);
         }
     }
-    if (!tr && p_jitwp) {
-        void *m = mmap(NULL, pgs, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON | MAP_JIT, -1, 0);
-        if (m != MAP_FAILED) { p_jitwp(0); tr = (uint8_t *)m; via = 2; }
-        vxLog(@"[VEEX] jit=%p", m);
-    }
-    if (!tr) {
-        vm_address_t a = 0;
-        if (vm_allocate(mach_task_self(), &a, pgs, VM_FLAGS_ANYWHERE) == KERN_SUCCESS) {
-            vm_protect(mach_task_self(), a, pgs, TRUE, rwx3);
-            if (vm_protect(mach_task_self(), a, pgs, FALSE, rwx3) == KERN_SUCCESS &&
-                (vxProtOf((void *)a) & VM_PROT_EXECUTE)) { tr = (uint8_t *)a; via = 3; }
-            else vm_deallocate(mach_task_self(), a, pgs);
-        }
-    }
+
     if (!tr && !gMapMode) {
         int r = vxCaveMap();
         vxLog(@"[VEEX] pair r=%d", r);
@@ -567,6 +598,7 @@ static int vxTrampExec(uint8_t *tr) {
     vxFlush(tr, VX_SLOT);
     if (via == 2) { if (p_jitwp) p_jitwp(1); return 0; }
     int p = vxProtOf(tr);
+    if (via == 9) { vxLog(@"[VEEX] gcx=%x", p); return (p & VM_PROT_EXECUTE) ? 0 : -12; }
     if (via == 7) { vxLog(@"[VEEX] cavex=%x", p); return (p & VM_PROT_EXECUTE) ? 0 : -12; }
     if (p & VM_PROT_EXECUTE) return 0;
 
@@ -615,7 +647,7 @@ static int vxInlineHook(void *target, void *rep, void **origOut) {
     memcpy(orig, t, 16);
 
     uint8_t *tr = NULL;
-    int pr = vxTrampPrep(&tr);
+    int pr = vxTrampPrep(&tr, (uint64_t)target);
     vxLog(@"[VEEX] prep=%d", pr);
     if (pr != 0) return pr;
 
@@ -1573,7 +1605,7 @@ static void vxWipe(void) {
 static void vxResetGuest(void) {
     vxLog(@"[VEEX] RESET armado");
     NSString *flag = [gDocs stringByAppendingPathComponent:@"veex.reset"];
-    [@"1" writeToFile:flag atomically:YES encoding:NSUTF8StringEncoding error:NULL];
+    [@"1" writeToFile:flag atomically:YES encoding:NSUTF8StringEncoding error:nil];
     [[NSUserDefaults standardUserDefaults] synchronize];
     vxLog(@"[VEEX] RESET escrito=%d", [[NSFileManager defaultManager] fileExistsAtPath:flag] ? 1 : 0);
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)),
@@ -1808,7 +1840,7 @@ static int vxNearHook(void *target) {
 static int l_testret(lua_State *L) {
     uint8_t *tr = NULL;
     vxLog(@"[VEEX] ref=%x", vxProtOf((void *)h_harvest_c));
-    int pr = vxTrampPrep(&tr);
+    int pr = vxTrampPrep(&tr, 0);
     vxLog(@"[VEEX] rprep=%d", pr);
     if (pr != 0) { lua_pushinteger(L, pr); return 1; }
     uint32_t rt = 0xD65F03C0u;
@@ -1831,7 +1863,7 @@ static int l_teststub(lua_State *L) {
 
 static int l_testtramp(lua_State *L) {
     uint8_t *tr = NULL;
-    int pr = vxTrampPrep(&tr);
+    int pr = vxTrampPrep(&tr, 0);
     vxLog(@"[VEEX] tprep=%d", pr);
     if (pr != 0) { lua_pushinteger(L, pr); return 1; }
     uint32_t b[4];
