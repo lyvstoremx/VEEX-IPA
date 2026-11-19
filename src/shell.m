@@ -1,4 +1,4 @@
-// src/shell.m — VEEX build 139
+// src/shell.m — VEEX build 140
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
@@ -39,7 +39,7 @@ extern kern_return_t mach_vm_remap(vm_map_t target_task, uint64_t *address, uint
                                    uint64_t src_address, int copy, int *cur_protection,
                                    int *max_protection, int inheritance);
 
-#define VX_BUILD 139
+#define VX_BUILD 140
 #define VX_STAGE 0
 #define VX_BOOT 3
 #define VX_HOOKSET 5
@@ -1214,7 +1214,7 @@ static void vxLoadIL2CPP(void) {
     R("il2cpp_class_get_namespace", p_cns);
     R("il2cpp_class_get_methods", p_ml);
     R("il2cpp_method_get_name", p_mn);
-    R("il2cpp_class_get_method_from_field", p_mf);
+    R("il2cpp_class_get_method_from_name", p_mf);
     R("il2cpp_object_get_class", p_kl);
     R("il2cpp_method_get_param_count", p_pc);
 #undef R
