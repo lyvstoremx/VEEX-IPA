@@ -1,5 +1,5 @@
--- esp.lua V68
-log("V68 sw="..sw().." sh="..sh())
+-- esp.lua V69
+log("V69 sw="..sw().." sh="..sh())
 
 local ok = false
 local n = 0
@@ -8,6 +8,8 @@ local hArr = 0
 local objP = 0
 local hP = 0
 local selfE = 0
+local camE = 0
+local hCam = 0
 local frame = 0
 local ticks = 0
 local lastTry = -999
@@ -27,9 +29,11 @@ end
 
 local function drop()
   if hArr ~= 0 then gchf(hArr); hArr = 0 end
+  if hCam ~= 0 then gchf(hCam); hCam = 0 end
   arr = 0
   n = 0
   selfE = 0
+  camE = 0
 end
 
 local function refresh()
@@ -90,10 +94,12 @@ local function setup()
   if cam == 0 then return end
 
   if camset(mW, mP, cam) then
+    camE = cam
+    hCam = gch(cam)
     camupd()
     matdump()
     setcfg("esp.on", 1)
-    log("esp forzado self="..tostring(selfE))
+    log("esp forzado")
     ok = true
   end
 end
@@ -103,20 +109,39 @@ function tick()
   if boot_cfg() then return end
   if not ok then setup(); return end
 
+  if camE == 0 or r64(camE + 0x10) == 0 then
+    log("cam muerta")
+    ok = false
+    return
+  end
+
   frame = frame + 1
   if frame % 8 == 0 then refresh() end
   if n <= 0 then ok = false; return end
 
-  local dead = 0
+  local dead, nearI, nearCw = 0, -1, 99999
   for i = 0, n - 1 do
     local e = arrat(arr, i)
-    if e == 0 or r64(e + 0x10) == 0 then dead = dead + 1 end
+    if e == 0 or r64(e + 0x10) == 0 then
+      dead = dead + 1
+    else
+      local tr = call(mGT, e)
+      if tr and tr ~= 0 then
+        local px, py, pz = gete(mGP, tr)
+        local _, _, _, cw = w2smd(px, py, pz)
+        if cw > 0.5 and cw < nearCw then nearCw = cw; nearI = i end
+      end
+    end
   end
+
   if dead * 2 > n then
     log("stale n="..n.." dead="..dead)
     ok = false
     return
   end
+
+  local hideI, hideE = -1, 0
+  if nearI >= 0 and nearCw < 3.5 then hideI = nearI else hideE = selfE end
 
   camupd()
   clear()
@@ -136,12 +161,12 @@ function tick()
 
   for i = 0, nn - 1 do
     local e = arrat(arr, i)
-    if e ~= 0 and e ~= selfE and r64(e + 0x10) ~= 0 then
+    if e ~= 0 and i ~= hideI and e ~= hideE and r64(e + 0x10) ~= 0 then
       local tr = call(mGT, e)
       if tr and tr ~= 0 then
         local px, py, pz = gete(mGP, tr)
         local _, _, _, cw, nx, ny = w2smd(px, py, pz)
-        if cw > 1.0 then
+        if cw > 0.5 then
           d = d + 1
           if cw < near then near = cw end
           if on then
@@ -167,6 +192,6 @@ function tick()
 
   if frame % 20 == 0 then
     if near > 9999 then near = 0 end
-    log("f="..frame.." n="..nn.." d="..d.." dead="..dead.." cw="..math.floor(near))
+    log("f="..frame.." n="..nn.." d="..d.." dead="..dead.." self="..hideI.." cw="..math.floor(near))
   end
 end
