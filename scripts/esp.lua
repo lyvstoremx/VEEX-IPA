@@ -1,8 +1,9 @@
--- PROBE34: caza del contenedor, dos saltos. Solo lectura.
+-- PROBE35: caza del contenedor, dos saltos, con tope. Solo lectura.
 local step, t0, beat = 0, os.time(), 0
 local PLC = nil
 local cands = {}
 local seen = {}
+local vis = {}
 local mejor, mejorP = nil, 0
 
 local function hex(v) if not v then return "nil" end return string.format("%x", v) end
@@ -19,41 +20,42 @@ local function esPlayer(k)
   return false
 end
 
-local function addc(k, n, off, tag)
-  if #cands >= 200 then return end
-  cands[#cands + 1] = { k = k, n = n, o = off, t = tag }
+local function addc(k, n, tag)
+  if #cands >= 60 then return end
+  cands[#cands + 1] = { k = k, n = n, t = tag }
 end
 
-local function mirar(k, tag)
-  local f = fields(k)
-  local hay = false
-  for _, b in ipairs(f) do
+local function mirar(k, tag, prof)
+  if not k or k == 0 or prof > 2 then return end
+  if vis[k] then return end
+  vis[k] = true
+
+  for _, b in ipairs(fields(k)) do
     local off, ty, nm = string.match(b, "^0x(%x+) (%S+) (%S+)$")
     if off and ty and nm and col(ty) and esP(ty) then
       log("F " .. tag .. " " .. b)
-      hay = true
     end
   end
+
   for _, s in ipairs(statics(k)) do
     local nm = string.match(s, "(%S+)$")
     if nm and col(s) and esP(s) then
       log("cand " .. tag .. " " .. s)
-      addc(k, nm, nil, tag)
+      addc(k, nm, tag)
     elseif nm and not col(s) and (string.find(s, "Manager") or string.find(s, "Facade")
         or string.find(s, "Scene") or string.find(s, "Battle")) then
       local o = sget(k, nm)
       if o and o ~= 0 and plaus(o) then
         local kk = kl(o)
-        log("hop " .. tag .. " " .. nm .. "=" .. hex(o) .. " k=" .. hex(kk))
-        if kk and kk ~= 0 then mirar(kk, tag .. ">" .. nm) end
+        if prof <= 1 then log("hop " .. tag .. " " .. nm .. "=" .. hex(o) .. " k=" .. hex(kk)) end
+        if kk and kk ~= 0 then mirar(kk, nm, prof + 1) end
       end
     end
   end
-  return hay
 end
 
 function tick()
-  log("V34")
+  log("V35")
   if cfg("set.reset") == 1 then setcfg("set.reset", 0) reset() end
   if cfg("set.reload") == 1 then setcfg("set.reload", 0) reload() end
   if not i2c_ready() then return end
@@ -70,19 +72,18 @@ function tick()
     log("pl=" .. hex(PLC))
     if not PLC then step = 9 return end
 
-    local qs = { "PlayerManager", "Player", "PlayerSpawn", "AllPlayer",
-                 "EntityManager", "GameScene", "BattleManager", "MatchManager",
-                 "RoomManager", "GamePlayManager", "SceneManager" }
+    local qs = { "PlayerManager", "Player", "EntityManager", "GameScene",
+                 "BattleManager", "GamePlayManager", "SceneManager" }
     local cls = {}
     for _, q in ipairs(qs) do
-      local t = dump(q, 30)
+      local t = dump(q, 25)
       local k = 0
       for _, c in ipairs(t) do
         local ns = c.s
         if not ns or ns == "" then ns = "-" end
         log("d " .. ns .. "::" .. c.n .. " " .. hex(c.p))
         k = k + 1
-        if c.p and c.p ~= 0 and not seen[c.p] and #cls < 120 then
+        if c.p and c.p ~= 0 and not seen[c.p] and #cls < 100 then
           seen[c.p] = true
           cls[#cls + 1] = { k = c.p, n = c.n }
         end
@@ -94,7 +95,7 @@ function tick()
     for _, c in ipairs(cls) do
       if string.find(c.n, "Player") or string.find(c.n, "Manager")
          or string.find(c.n, "Scene") or string.find(c.n, "Battle") then
-        mirar(c.k, c.n)
+        mirar(c.k, c.n, 0)
       end
     end
     log("cand_total=" .. #cands)
@@ -157,7 +158,7 @@ function tick()
         end
       end
     end
-    log("PROBE34 FIN")
+    log("PROBE35 FIN")
     step = 9
     return
   end
