@@ -1,15 +1,22 @@
--- esp.lua V54
-log("V54 sw="..sw().." sh="..sh())
+-- esp.lua V56
+log("V56 sw="..sw().." sh="..sh())
 
 local ok = false
 local n = 0
 local arr = 0
 local frame = 0
+local ticks = 0
 local mFOT, mGC, mGP, objT
 local said = false
 
 local function boot_cfg()
-  if cfg("set.reset") == 1 then setcfg("set.reset", 0); reset(); return true end
+  if ticks < 60 then return false end
+  if cfg("set.reset") == 1 then
+    setcfg("set.reset", 0)
+    log("reset disparado")
+    reset()
+    return true
+  end
   if cfg("set.reload") == 1 then setcfg("set.reload", 0); reload(); return true end
   return false
 end
@@ -38,6 +45,7 @@ local function setup()
   mGP = i2c_mptr(kT, "get_position", 0)
   local mW = i2c_mptr(kM, "get_worldToCameraMatrix", 0)
   local mP = i2c_mptr(kM, "get_projectionMatrix", 0)
+  if not mP then mP = i2c_mptr(kM, "get_projectionMatrix", 0) end
   log("m="..tostring(mFOT).." "..tostring(mGC).." "..tostring(mW).." "..tostring(mP))
   if not (mFOT and mGC and mGP and mW and mP) then return end
 
@@ -70,6 +78,7 @@ local function setup()
 end
 
 function tick()
+  ticks = ticks + 1
   if boot_cfg() then return end
   if not ok then setup(); return end
 
@@ -77,15 +86,20 @@ function tick()
   if frame % 5 == 1 then arr = call(mFOT, objP); n = arrlen(arr) end
   camupd()
   clear()
-  if not n or n <= 0 then return end
 
   local w, h = sw(), sh()
+  line(w / 2 - 25, h / 2, 50, 0, 1, 0, 0, 1)
+  line(w / 2, h / 2 - 25, 0, 50, 1, 0, 0, 1)
+  text("V56", w / 2 + 30, h / 2 - 8, 1, 0, 0, 1)
+
+  if not n or n <= 0 then return end
+
   local on = cfg("esp.on") == 1
   local box = cfg("esp.box") == 1
   local nm = cfg("esp.name") == 1
   local ln = cfg("draw.line") == 1
   local d = 0
-  local sx0, sy0 = 0, 0
+  local p0x, p0y, p0z = 0, 0, 0
 
   for i = 0, n - 1 do
     local e = arrat(arr, i)
@@ -98,7 +112,7 @@ function tick()
           local hx, hy, hv = w2sm(px, py + 180, pz)
           if fv and hv then
             d = d + 1
-            if d == 1 then sx0, sy0 = fx, fy end
+            if d == 1 then p0x, p0y, p0z = px, py, pz end
             if on then
               local bh = math.abs(fy - hy)
               if bh < 12 then bh = 12 end
@@ -115,6 +129,15 @@ function tick()
     end
   end
 
-  if frame % 20 == 0 then log("d="..d.."/"..n.." on="..tostring(on)) end
-  if d > 0 and not said then said = true; log("first "..math.floor(sx0)..","..math.floor(sy0)) end
+  if frame % 5 == 0 then
+    if d > 0 then
+      local vx, vy, vz, cw, nx, ny = w2smd(p0x, p0y, p0z)
+      log("d="..d.."/"..n.." p="..math.floor(p0x)..","..math.floor(p0y)..","..math.floor(p0z)..
+          " v="..math.floor(vx)..","..math.floor(vy)..","..math.floor(vz)..
+          " cw="..math.floor(cw).." n="..math.floor(nx)..","..math.floor(ny))
+    else
+      log("d=0/"..n)
+    end
+  end
+  if d > 0 and not said then said = true; log("first ok") end
 end
