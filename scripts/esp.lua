@@ -1,5 +1,5 @@
--- esp.lua V63
-log("V63 sw="..sw().." sh="..sh())
+-- esp.lua V64
+log("V64 sw="..sw().." sh="..sh())
 
 local ok = false
 local n = 0
@@ -82,7 +82,8 @@ function tick()
   if not ok then setup(); return end
 
   frame = frame + 1
-  if frame % 5 == 1 then arr = call(mFOT, objP); n = arrlen(arr) end
+  arr = call(mFOT, objP)
+  n = arrlen(arr)
   camupd()
   clear()
 
@@ -97,6 +98,7 @@ function tick()
   local ln = cfg("draw.line") == 1
   local d = 0
   local nn = n or 0
+  local top = h * 0.35
 
   for i = 0, nn - 1 do
     local e = arrat(arr, i)
@@ -111,8 +113,8 @@ function tick()
             if on then
               local hx, hy = w2smu(px, py + 180, pz)
               local bh = math.abs(fy - hy)
-              if bh < 16 then bh = 16 end
-              if bh > 800 then bh = 800 end
+              if bh < 26 then bh = 26 end
+              if bh > top then bh = top end
               local by = fy - bh
               local bw = bh * 0.5
               if box then rect(fx - bw / 2, by, bw, bh, 0.1, 0.95, 0.35, 1) end
