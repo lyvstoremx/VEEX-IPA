@@ -26,7 +26,7 @@ function tick()
     local r, op = hookm(PLC, "UpdateKinematics", 2)
     log("hookm=" .. tostring(r) .. " op=" .. (op and string.format("%x", op) or "nil"))
     log("h1=" .. tostring(hook1(op or m)))
-    log("PROBE28 VIVO")
+    log("PROBE29 VIVO")
     return
   end
 
