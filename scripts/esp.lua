@@ -1,9 +1,10 @@
--- esp.lua V64
-log("V64 sw="..sw().." sh="..sh())
+-- esp.lua V65
+log("V65 sw="..sw().." sh="..sh())
 
 local ok = false
 local n = 0
 local arr = 0
+local hArr = 0
 local frame = 0
 local ticks = 0
 local mFOT, mGP, mGT, objP
@@ -18,6 +19,13 @@ local function boot_cfg()
   end
   if cfg("set.reload") == 1 then setcfg("set.reload", 0); reload(); return true end
   return false
+end
+
+local function refresh()
+  if hArr ~= 0 then gchf(hArr); hArr = 0 end
+  arr = call(mFOT, objP)
+  if arr and arr ~= 0 then hArr = gch(arr) end
+  n = arrlen(arr)
 end
 
 local function setup()
@@ -35,7 +43,7 @@ local function setup()
   local fto = sym("il2cpp_type_get_object")
   if not (fct and fto) then log("sin type"); return end
 
-  objP = call(fto, call(fct, kP))
+  objP = gch(call(fto, call(fct, kP)))
   local objC = call(fto, call(fct, kM))
 
   mFOT = i2c_mptr(kO, "FindObjectsOfType", 1)
@@ -48,8 +56,7 @@ local function setup()
   log("m="..tostring(mFOT).." "..tostring(mGT).." "..tostring(mW).." "..tostring(mP))
   if not (mFOT and mGT and mGP and mW and mP) then return end
 
-  arr = call(mFOT, objP)
-  n = arrlen(arr)
+  refresh()
   log("n="..n)
   if n <= 0 then return end
 
@@ -82,8 +89,7 @@ function tick()
   if not ok then setup(); return end
 
   frame = frame + 1
-  arr = call(mFOT, objP)
-  n = arrlen(arr)
+  refresh()
   camupd()
   clear()
 
