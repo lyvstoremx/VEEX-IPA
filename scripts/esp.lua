@@ -1,92 +1,77 @@
--- PROBE43: enumeración en partida, con segundo intento.
+-- PROBE44: identifica la clase devuelta y lee posiciones.
 local step, t0, beat = 0, os.time(), 0
-local PLC, jug, arr = nil, {}, nil
+local PLC = nil
+local hecho = false
 
 local function hex(v) if not v then return "nil" end return string.format("%x", v) end
 local function plaus(p) return p and p > 4294967296 and p < 549755813888 and (p % 8) == 0 end
 
-local function leer(a, et)
-  if not a or a == 0 or not plaus(a) then log(et .. " arr malo") return end
-  local n = arrlen(a)
-  log(et .. " n=" .. tostring(n))
-  if not n or n <= 0 then return end
-  local lim = n
-  if lim > 3000 then lim = 3000 end
-  local k = 0
-  for i = 0, lim - 1 do
-    local o = arrat(a, i)
-    if o and o ~= 0 then
-      local kk = kl(o)
-      if kk == PLC then
-        k = k + 1
-        jug[k] = o
-        if k <= 8 then
-          log("P" .. k .. "=" .. hex(o))
-          log("  v270=" .. tostring(rf(o + 0x270)) .. " v320=" .. tostring(rf(o + 0x320))
-              .. " v344=" .. tostring(rf(o + 0x344)) .. " v7e8=" .. tostring(rf(o + 0x7e8)))
-          log("  cam=" .. hex(r64(o + 0x3e8)))
-        end
-      elseif i < 10 then
-        log("  otra k=" .. hex(kk))
-      end
-    end
-  end
-  log(et .. " jugadores=" .. k)
-end
-
 function tick()
-  if cfg("set.reset") == 1 then setcfg("set.reset", 0) reset() end
-  if cfg("set.reload") == 1 then setcfg("set.reload", 0) reload() end
+  if hecho then return end
   if not i2c_ready() then return end
 
   local ahora = os.time()
   if ahora - beat >= 5 then
     beat = ahora
-    log("VIVO43 t=" .. (ahora - t0) .. " s=" .. step .. " n=" .. #jug)
+    log("VIVO44 s=" .. step)
   end
 
   if step == 0 then
     step = 1
     PLC = i2c_class("COW.GamePlay", "Player")
     log("pl=" .. hex(PLC))
-    if not PLC then step = 9 return end
-    local ftype = sym("il2cpp_class_get_type")
-    local fobj = sym("il2cpp_type_get_object")
-    log("symT=" .. hex(ftype) .. " symO=" .. hex(fobj))
-    if not ftype or not fobj then step = 9 return end
-    local tp = call(ftype, PLC)
-    if not tp or tp == 0 then log("tp malo") step = 9 return end
-    local to = call(fobj, tp)
-    log("to=" .. hex(to))
-    if not to or to == 0 then step = 9 return end
-    return
-  end
-
-  if step == 1 then
-    step = 2
+    if not PLC then hecho = true return end
+    local tp = call(sym("il2cpp_class_get_type"), PLC)
+    local to = call(sym("il2cpp_type_get_object"), tp)
+    log("tp=" .. hex(tp) .. " to=" .. hex(to))
+    if not to or to == 0 then hecho = true return end
     local OK = i2c_class("UnityEngine", "Object")
-    if not OK then step = 9 return end
-    local to = call(sym("il2cpp_type_get_object"), call(sym("il2cpp_class_get_type"), PLC))
     local m = i2c_mptr(OK, "FindObjectsOfType", 1)
-    log("m=" .. hex(m))
-    if m and m ~= 0 then
-      arr = call(m, to)
-      log("arr=" .. hex(arr))
-      leer(arr, "A")
-    end
-    return
-  end
+    local arr = call(m, to)
+    log("arr=" .. hex(arr))
+    if not arr or not plaus(arr) then hecho = true return end
+    local n = arrlen(arr)
+    log("n=" .. tostring(n))
+    if not n or n <= 0 then hecho = true return end
 
-  if step == 2 then
-    step = 3
-    local OK = i2c_class("UnityEngine", "Object")
-    if not OK then step = 9 return end
-    local to = call(sym("il2cpp_type_get_object"), call(sym("il2cpp_class_get_type"), PLC))
-    local m2 = i2c_mptr(OK, "FindObjectsOfTypeAll", 1)
-    log("m2=" .. hex(m2))
-    if m2 and m2 ~= 0 then leer(call(m2, to), "B") end
-    log("FIN43")
-    step = 9
+    local o = arrat(arr, 0)
+    if not o or o == 0 then hecho = true return end
+    local kk = kl(o)
+    log("o0=" .. hex(o) .. " kk=" .. hex(kk))
+    log("kk==pl -> " .. tostring(kk == PLC))
+
+    local pp = parents(kk)
+    local s = ""
+    for _, p in ipairs(pp) do s = s .. " " .. p end
+    log("padres:" .. s)
+    local esP = false
+    for _, p in ipairs(pp) do
+      if string.find(p, "Player") then esP = true end
+    end
+    log("esPlayer=" .. tostring(esP))
+
+    if not esP then hecho = true return end
+
+    local z = 0
+    for _, b in ipairs(fields(kk)) do
+      if z < 30 then log("f " .. b) end
+      z = z + 1
+    end
+    log("fn=" .. z)
+
+    local lim = n
+    if lim > 5 then lim = 5 end
+    for i = 0, lim - 1 do
+      local x = arrat(arr, i)
+      if x and x ~= 0 then
+        log("X" .. i .. "=" .. hex(x))
+        log("  v270=" .. tostring(rf(x + 0x270)) .. " v320=" .. tostring(rf(x + 0x320))
+            .. " v344=" .. tostring(rf(x + 0x344)) .. " v7e8=" .. tostring(rf(x + 0x7e8)))
+        log("  cam=" .. hex(r64(x + 0x3e8)))
+      end
+    end
+    log("FIN44")
+    hecho = true
     return
   end
 end
