@@ -1,5 +1,5 @@
--- esp.lua V62
-log("V62 sw="..sw().." sh="..sh())
+-- esp.lua V63
+log("V63 sw="..sw().." sh="..sh())
 
 local ok = false
 local n = 0
@@ -109,19 +109,15 @@ function tick()
           if fv then
             d = d + 1
             if on then
-              local hx, hy, hv = w2sm(px, py + 180, pz)
-              local by, bh, cx = fy - 60, 60, fx
-              if hv then
-                bh = math.abs(fy - hy)
-                if bh < 14 then bh = 14 end
-                if bh > 400 then bh = 400 end
-                by = hy
-                cx = (fx + hx) * 0.5
-              end
-              local bw = bh * 0.55
-              if box then rect(cx - bw / 2, by, bw, bh, 0.1, 0.95, 0.35, 1) end
-              if ln then line(cx, by + bh, w / 2, h - 6, 0.95, 0.9, 0.15, 1) end
-              if nm then text("P"..i, cx - 9, by - 13, 1, 1, 1, 1) end
+              local hx, hy = w2smu(px, py + 180, pz)
+              local bh = math.abs(fy - hy)
+              if bh < 16 then bh = 16 end
+              if bh > 800 then bh = 800 end
+              local by = fy - bh
+              local bw = bh * 0.5
+              if box then rect(fx - bw / 2, by, bw, bh, 0.1, 0.95, 0.35, 1) end
+              if ln then line(fx, fy, w / 2, h - 6, 0.95, 0.9, 0.15, 1) end
+              if nm then text("P"..i, fx - 9, by - 13, 1, 1, 1, 1) end
             end
           end
         end
