@@ -1,4 +1,4 @@
-// src/shell.m — VEEX build 129
+// src/shell.m — VEEX build 130
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
@@ -39,7 +39,7 @@ extern kern_return_t mach_vm_remap(vm_map_t target_task, uint64_t *address, uint
                                    uint64_t src_address, int copy, int *cur_protection,
                                    int *max_protection, int inheritance);
 
-#define VX_BUILD 129
+#define VX_BUILD 130
 #define VX_STAGE 0
 #define VX_BOOT 3
 #define VX_HOOKSET 5
@@ -155,12 +155,13 @@ static void vxHex(const char *hex, unsigned char *out, int len) {
 #define VX_TR_MAX      140
 #define VX_SLOT        128
 #define VX_TRAMP_SZ    (VX_TRAMP_SLOTS * VX_SLOT)
-#define VX_CAVE_SZ     2048
+#define VX_CAVE_SZ     4096
 
 __attribute__((used, section("__TEXT,__vxcave")))
 static const uint8_t gCavePad[VX_CAVE_SZ] = {0};
 
 static uint8_t *gCave = (uint8_t *)gCavePad;
+static uint8_t *gCaveCur = (uint8_t *)gCavePad;
 static size_t gCaveLeft = VX_CAVE_SZ;
 static uint8_t *gMapW = NULL;
 static uint8_t *gMapX = NULL;
@@ -376,7 +377,6 @@ static int vxCaveMap(void) {
     }
     if (!tfound) { vxLog(@"[VEEX] map sin text"); return -1; }
     uint64_t slide = (uint64_t)h - tv;
-    vxLog(@"[VEEX] map base=%p tv=%llx sl=%llx", h, tv, slide);
 
     lc = (const struct load_command *)(h + 1);
     uint64_t off = 0;
@@ -395,7 +395,6 @@ static int vxCaveMap(void) {
         lc = (const struct load_command *)((uint8_t *)lc + lc->cmdsize);
     }
     if (!off) { vxLog(@"[VEEX] map sin seccion"); return -1; }
-    vxLog(@"[VEEX] map off=%llx", off);
 
     int r = vxMapPair(di.dli_fname, off);
     if (r > 0) return r;
@@ -416,38 +415,66 @@ static void vxSlotWrite(uint8_t *tr, const void *src, size_t n) {
     memcpy(tr, src, n);
 }
 
+static int vxCaveDirect(uint8_t **out) {
+    if (gCaveLeft < VX_SLOT) return -15;
+    uint8_t *c = gCaveCur;
+    uint64_t pg = (uint64_t)c & ~(uint64_t)(VX_PG - 1);
+    uint64_t endp = ((uint64_t)c + VX_SLOT + VX_PG - 1) & ~(uint64_t)(VX_PG - 1);
+    size_t span = (size_t)(endp - pg);
+    const int rwx = VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXECUTE;
+
+    int p0 = vxProtOf(c);
+    int mp = mprotect((void *)pg, span, PROT_READ | PROT_WRITE | PROT_EXEC);
+    int p1 = vxProtOf(c);
+    vxLog(@"[VEEX] cave p0=%x mp=%d p1=%x", p0, mp, p1);
+
+    if (!(p1 & VM_PROT_WRITE) || !(p1 & VM_PROT_EXECUTE)) {
+        kern_return_t k1 = vm_protect(mach_task_self(), pg, span, TRUE, rwx);
+        kern_return_t k2 = vm_protect(mach_task_self(), pg, span, FALSE, rwx);
+        int p2 = vxProtOf(c);
+        vxLog(@"[VEEX] cave k1=%d k2=%d p2=%x", (int)k1, (int)k2, p2);
+        if (!(p2 & VM_PROT_WRITE)) {
+            kern_return_t k3 = vm_protect(mach_task_self(), pg, span, FALSE,
+                                          VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY);
+            int p3 = vxProtOf(c);
+            vxLog(@"[VEEX] cave cow k3=%d p3=%x", (int)k3, p3);
+            if (!(p3 & VM_PROT_WRITE)) return -16;
+        }
+    }
+
+    memset(c, 0, VX_SLOT);
+    gCaveCur += VX_SLOT; gCaveLeft -= VX_SLOT;
+    *out = c;
+    return 0;
+}
+
 static int vxTrampPrep(uint8_t **out) {
     if (gTrN >= VX_TR_MAX) return -9;
-
-    if (gMapMode == 0) vxCaveMap();
-    if (gMapMode > 0) {
-        if (gMapLeft < VX_SLOT) return -13;
-        uint8_t *x = gMapX, *w = gMapW;
-        memset(w, 0, VX_SLOT);
-        gMapX += VX_SLOT; gMapW += VX_SLOT; gMapLeft -= VX_SLOT;
-        gTrP[gTrN] = x; gTrW[gTrN] = w; gTrV[gTrN] = 6; gTrN++;
-        *out = x;
-        vxLog(@"[VEEX] map=%p w=%p m=%d", x, w, gMapMode);
-        return 0;
-    }
 
     uint8_t *tr = NULL;
     int via = -1;
     vm_size_t pgs = (vm_size_t)VX_PG;
+    const int rwx3 = VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXECUTE;
 
     {
         void *m = mmap(NULL, pgs, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
         if (m != MAP_FAILED) {
-            kern_return_t k1 = vm_protect(mach_task_self(), (vm_address_t)m, pgs, TRUE,
-                                          VM_PROT_READ | VM_PROT_EXECUTE);
-            kern_return_t k2 = vm_protect(mach_task_self(), (vm_address_t)m, pgs, FALSE,
-                                          VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXECUTE);
+            kern_return_t k1 = vm_protect(mach_task_self(), (vm_address_t)m, pgs, TRUE, rwx3);
+            kern_return_t k2 = vm_protect(mach_task_self(), (vm_address_t)m, pgs, FALSE, rwx3);
             int p = vxProtOf(m);
             vxLog(@"[VEEX] amx k1=%d k2=%d p=%x", (int)k1, (int)k2, p);
-            if (k1 == KERN_SUCCESS && k2 == KERN_SUCCESS && (p & VM_PROT_EXECUTE)) { tr = (uint8_t *)m; via = 4; }
+            if (k2 == KERN_SUCCESS && (p & VM_PROT_WRITE) && (p & VM_PROT_EXECUTE)) { tr = (uint8_t *)m; via = 4; }
             else munmap(m, pgs);
         }
     }
+
+    if (!tr) {
+        int r = vxCaveDirect(&tr);
+        vxLog(@"[VEEX] cave r=%d", r);
+        if (r == 0) via = 7;
+        else tr = NULL;
+    }
+
     if (!tr) {
         void *m = mmap(NULL, pgs, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_ANON, -1, 0);
         if (m != MAP_FAILED) {
@@ -465,11 +492,20 @@ static int vxTrampPrep(uint8_t **out) {
     if (!tr) {
         vm_address_t a = 0;
         if (vm_allocate(mach_task_self(), &a, pgs, VM_FLAGS_ANYWHERE) == KERN_SUCCESS) {
-            vm_protect(mach_task_self(), a, pgs, TRUE, VM_PROT_READ | VM_PROT_EXECUTE);
-            if (vm_protect(mach_task_self(), a, pgs, FALSE,
-                           VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXECUTE) == KERN_SUCCESS &&
+            vm_protect(mach_task_self(), a, pgs, TRUE, rwx3);
+            if (vm_protect(mach_task_self(), a, pgs, FALSE, rwx3) == KERN_SUCCESS &&
                 (vxProtOf((void *)a) & VM_PROT_EXECUTE)) { tr = (uint8_t *)a; via = 3; }
             else vm_deallocate(mach_task_self(), a, pgs);
+        }
+    }
+    if (!tr && !gMapMode) {
+        int r = vxCaveMap();
+        vxLog(@"[VEEX] pair r=%d", r);
+        if (r > 0 && gMapLeft >= VX_SLOT) {
+            uint8_t *x = gMapX, *w = gMapW;
+            memset(w, 0, VX_SLOT);
+            gMapX += VX_SLOT; gMapW += VX_SLOT; gMapLeft -= VX_SLOT;
+            tr = x; via = 6;
         }
     }
     if (!tr) { vxLog(@"[VEEX] sin tramp"); return -11; }
@@ -493,7 +529,9 @@ static int vxTrampExec(uint8_t *tr) {
 
     vxFlush(tr, VX_SLOT);
     if (via == 2) { if (p_jitwp) p_jitwp(1); return 0; }
-    if (vxProtOf(tr) & VM_PROT_EXECUTE) return 0;
+    int p = vxProtOf(tr);
+    if (via == 7) { vxLog(@"[VEEX] cavex=%x", p); return (p & VM_PROT_EXECUTE) ? 0 : -12; }
+    if (p & VM_PROT_EXECUTE) return 0;
 
     uint64_t pg = (uint64_t)tr & ~(VX_PG - 1);
     mprotect((void *)pg, VX_PG, PROT_READ | PROT_EXEC);
@@ -502,7 +540,7 @@ static int vxTrampExec(uint8_t *tr) {
         vm_protect(mach_task_self(), pg, VX_PG, FALSE, VM_PROT_READ | VM_PROT_EXECUTE);
         vxFlush(tr, VX_SLOT);
     }
-    int p = vxProtOf(tr);
+    p = vxProtOf(tr);
     vxLog(@"[VEEX] xp=%x", p);
     return (p & VM_PROT_EXECUTE) ? 0 : -12;
 }
