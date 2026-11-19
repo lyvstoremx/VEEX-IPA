@@ -1,5 +1,5 @@
--- esp.lua V60
-log("V60 sw="..sw().." sh="..sh())
+-- esp.lua V61
+log("V61 sw="..sw().." sh="..sh())
 
 local ok = false
 local n = 0
@@ -111,8 +111,8 @@ function tick()
             d = d + 1
             if on then
               local bh = math.abs(fy - hy)
-              if bh < 12 then bh = 12 end
-              if bh > 300 then bh = 300 end
+              if bh < 14 then bh = 14 end
+              if bh > 400 then bh = 400 end
               local bw = bh * 0.55
               local cx = (fx + hx) * 0.5
               if box then rect(cx - bw / 2, hy, bw, bh, 0.1, 0.95, 0.35, 1) end
@@ -125,24 +125,7 @@ function tick()
     end
   end
 
-  if frame % 20 == 0 then
-    local e0 = 0
-    local j = 0
-    while j < nn and e0 == 0 do e0 = arrat(arr, j); j = j + 1 end
-    if e0 and e0 ~= 0 then
-      local tr = call(mGT, e0)
-      if tr and tr ~= 0 then
-        local px, py, pz = gete(mGP, tr)
-        local vx, vy, vz, cw, nx, ny = w2smd(px, py, pz)
-        log("e0 d="..d.." tr="..tostring(tr)..
-            " p="..math.floor(px)..","..math.floor(py)..","..math.floor(pz)..
-            " v="..math.floor(vx)..","..math.floor(vy)..","..math.floor(vz)..
-            " cw="..math.floor(cw).." n="..math.floor(nx)..","..math.floor(ny))
-      else
-        log("e0 tr=0 d="..d)
-      end
-    else
-      log("e0 vacio")
-    end
-  end
+  text("d="..d.."/"..nn, 12, 16, 1, 1, 0, 1)
+
+  if frame % 20 == 0 then log("f="..frame.." n="..nn.." d="..d) end
 end
