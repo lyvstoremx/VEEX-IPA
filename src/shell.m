@@ -1,4 +1,4 @@
-// src/shell.m — VEEX build 134
+// src/shell.m — VEEX build 136
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
@@ -39,7 +39,7 @@ extern kern_return_t mach_vm_remap(vm_map_t target_task, uint64_t *address, uint
                                    uint64_t src_address, int copy, int *cur_protection,
                                    int *max_protection, int inheritance);
 
-#define VX_BUILD 134
+#define VX_BUILD 136
 #define VX_STAGE 0
 #define VX_BOOT 3
 #define VX_HOOKSET 5
@@ -457,19 +457,36 @@ static size_t vxRunLen(uint64_t a, uint64_t hi) {
     return n;
 }
 
-static uint8_t *vxFindCave(uint64_t near) {
-    if (!gBase || gSize < VX_GNEED) {
-        vxLog(@"[VEEX] gc base=%llx size=%llx", gBase, gSize);
+static uint8_t *vxFindCave(void *target) {
+    Dl_info di;
+    if (!dladdr(target, &di) || !di.dli_fbase) {
+        vxLog(@"[VEEX] gc sin dladdr");
         return NULL;
     }
-    uint64_t lo = gBase + 0x1000;
-    uint64_t hi = gBase + gSize - VX_GNEED;
-    vxLog(@"[VEEX] gc near=%llx lo=%llx hi=%llx", near, lo, hi);
+    const struct mach_header_64 *h = (const struct mach_header_64 *)di.dli_fbase;
+    if (h->magic != MH_MAGIC_64) { vxLog(@"[VEEX] gc magic %x", h->magic); return NULL; }
+
+    uint64_t vs = 0;
+    const struct load_command *lc = (const struct load_command *)(h + 1);
+    for (uint32_t i = 0; i < h->ncmds; i++) {
+        if (lc->cmd == LC_SEGMENT_64) {
+            const struct segment_command_64 *sg = (const struct segment_command_64 *)lc;
+            if (!strcmp(sg->segname, "__TEXT")) { vs = sg->vmsize; break; }
+        }
+        lc = (const struct load_command *)((uint8_t *)lc + lc->cmdsize);
+    }
+    if (vs < VX_GNEED * 2) { vxLog(@"[VEEX] gc text=%llx", vs); return NULL; }
+
+    uint64_t base = (uint64_t)h;
+    uint64_t lo = base + 0x1000;
+    uint64_t hi = base + vs - VX_GNEED;
+    uint64_t near = (uint64_t)target;
+    vxLog(@"[VEEX] gc img=%p text=%llx near=%llx lo=%llx hi=%llx", h, vs, near, lo, hi);
     if (near < lo || near > hi) { vxLog(@"[VEEX] gc fuera"); return NULL; }
 
     uint64_t bestAt = 0;
     size_t best = 0;
-    for (uint64_t d = 0x20; d < 0x1000000; d += 4) {
+    for (uint64_t d = 0x20; d < 0x2000000; d += 4) {
         uint64_t a = near + d;
         if (a < hi) {
             size_t n = vxRunLen(a, hi);
@@ -488,8 +505,8 @@ static uint8_t *vxFindCave(uint64_t near) {
     return NULL;
 }
 
-static int vxCaveGame(uint64_t near, uint8_t **out) {
-    uint8_t *c = vxFindCave(near);
+static int vxCaveGame(void *target, uint8_t **out) {
+    uint8_t *c = vxFindCave(target);
     vxLog(@"[VEEX] gc c=%p", c);
     if (!c) return -17;
     uint64_t pg = (uint64_t)c & ~(uint64_t)(VX_PG - 1);
@@ -537,23 +554,16 @@ static int vxCaveDirect(uint8_t **out) {
     return 0;
 }
 
-static int vxTrampPrep(uint8_t **out, uint64_t near) {
+static int vxTrampPrep(uint8_t **out, void *target) {
     if (gTrN >= VX_TR_MAX) return -9;
 
     uint8_t *tr = NULL;
     int via = -1;
 
-    if (near) {
-        int r = vxCaveGame(near, &tr);
+    if (target) {
+        int r = vxCaveGame(target, &tr);
         vxLog(@"[VEEX] gcr=%d", r);
         if (r == 0) via = 9;
-        else tr = NULL;
-    }
-
-    if (!tr) {
-        int r = vxCaveDirect(&tr);
-        vxLog(@"[VEEX] cave r=%d", r);
-        if (r == 0) via = 7;
         else tr = NULL;
     }
 
@@ -663,7 +673,7 @@ static int vxInlineHook(void *target, void *rep, void **origOut) {
     memcpy(orig, t, 16);
 
     uint8_t *tr = NULL;
-    int pr = vxTrampPrep(&tr, (uint64_t)target);
+    int pr = vxTrampPrep(&tr, target);
     vxLog(@"[VEEX] prep=%d", pr);
     if (pr != 0) return pr;
 
@@ -1220,6 +1230,7 @@ static void vxResetGuest(void);
 - (void)vxDoRun;
 - (void)vxDoStop;
 - (void)vxDoCopy;
+- (void)vxDoRst;
 @end
 
 @implementation VXRoot
@@ -1245,6 +1256,7 @@ static void vxResetGuest(void);
 - (void)vxDoRun { vxRunScript(); }
 - (void)vxDoStop { vxStopScript(); vxLog(@"[VEEX] stop"); }
 - (void)vxDoCopy { UIPasteboard.generalPasteboard.string = gLog ?: @""; vxLog(@"[VEEX] log copiado"); }
+- (void)vxDoRst { vxLog(@"[VEEX] RST tap"); vxResetGuest(); }
 @end
 
 @interface VXWindow : UIWindow @end
@@ -1622,7 +1634,7 @@ static void vxWipe(void) {
 static void vxResetGuest(void) {
     vxLog(@"[VEEX] RESET armado");
     NSString *flag = [gDocs stringByAppendingPathComponent:@"veex.reset"];
-    [@"1" writeToFile:flag atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    [@"1" writeToFile:flag atomically:YES encoding:NSUTF8StringEncoding error:NULL];
     [[NSUserDefaults standardUserDefaults] synchronize];
     vxLog(@"[VEEX] RESET escrito=%d", [[NSFileManager defaultManager] fileExistsAtPath:flag] ? 1 : 0);
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)),
@@ -1857,7 +1869,7 @@ static int vxNearHook(void *target) {
 static int l_testret(lua_State *L) {
     uint8_t *tr = NULL;
     vxLog(@"[VEEX] ref=%x", vxProtOf((void *)h_harvest_c));
-    int pr = vxTrampPrep(&tr, 0);
+    int pr = vxTrampPrep(&tr, NULL);
     vxLog(@"[VEEX] rprep=%d", pr);
     if (pr != 0) { lua_pushinteger(L, pr); return 1; }
     uint32_t rt = 0xD65F03C0u;
@@ -1880,7 +1892,7 @@ static int l_teststub(lua_State *L) {
 
 static int l_testtramp(lua_State *L) {
     uint8_t *tr = NULL;
-    int pr = vxTrampPrep(&tr, 0);
+    int pr = vxTrampPrep(&tr, NULL);
     vxLog(@"[VEEX] tprep=%d", pr);
     if (pr != 0) { lua_pushinteger(L, pr); return 1; }
     uint32_t b[4];
@@ -2172,14 +2184,21 @@ static void buildUI(UIWindowScene *sc) {
     head.backgroundColor = [UIColor colorWithWhite:0.11 alpha:1];
     [gPanel addSubview:head];
 
-    UILabel *ttl = [[UILabel alloc] initWithFrame:CGRectMake(12, 0, 120, 36)];
+    UILabel *ttl = [[UILabel alloc] initWithFrame:CGRectMake(10, 0, 88, 36)];
     ttl.text = [NSString stringWithFormat:@"VEEX %d", VX_BUILD];
     ttl.textColor = UIColor.whiteColor;
-    ttl.font = [UIFont monospacedSystemFontOfSize:14 weight:UIFontWeightBold];
+    ttl.font = [UIFont monospacedSystemFontOfSize:13 weight:UIFontWeightBold];
     [head addSubview:ttl];
 
+    UIButton *rst = [UIButton buttonWithType:UIButtonTypeSystem];
+    rst.frame = CGRectMake(102, 6, 40, 24);
+    [rst setTitle:@"RST" forState:UIControlStateNormal];
+    rst.titleLabel.font = [UIFont systemFontOfSize:11 weight:UIFontWeightBold];
+    [rst addTarget:gRoot action:@selector(vxDoRst) forControlEvents:UIControlEventTouchUpInside];
+    [head addSubview:rst];
+
     UIButton *hook = [UIButton buttonWithType:UIButtonTypeSystem];
-    hook.frame = CGRectMake(150, 6, 46, 24);
+    hook.frame = CGRectMake(146, 6, 46, 24);
     [hook setTitle:@"HOOK" forState:UIControlStateNormal];
     hook.titleLabel.font = [UIFont systemFontOfSize:11 weight:UIFontWeightBold];
     [hook addTarget:gRoot action:@selector(vxDoHook) forControlEvents:UIControlEventTouchUpInside];
