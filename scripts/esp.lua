@@ -53,6 +53,7 @@ local function mirar(k, tag)
 end
 
 function tick()
+  log("V34")
   if cfg("set.reset") == 1 then setcfg("set.reset", 0) reset() end
   if cfg("set.reload") == 1 then setcfg("set.reload", 0) reload() end
   if not i2c_ready() then return end
