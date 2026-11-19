@@ -1,12 +1,12 @@
--- esp.lua V58
-log("V58 sw="..sw().." sh="..sh())
+-- esp.lua V59
+log("V59 sw="..sw().." sh="..sh())
 
 local ok = false
 local n = 0
 local arr = 0
 local frame = 0
 local ticks = 0
-local mFOT, mGC, mGP, objT
+local mFOT, mGC, mGP, objT, objP
 
 local function boot_cfg()
   if ticks < 60 then return false end
@@ -35,7 +35,7 @@ local function setup()
   local fto = sym("il2cpp_type_get_object")
   if not (fct and fto) then log("sin type"); return end
 
-  local objP = call(fto, call(fct, kP))
+  objP = call(fto, call(fct, kP))
   objT = call(fto, call(fct, kT))
   local objC = call(fto, call(fct, kM))
 
@@ -50,7 +50,7 @@ local function setup()
 
   arr = call(mFOT, objP)
   n = arrlen(arr)
-  log("n="..n)
+  log("n="..n.." t="..tostring(objP))
   if n <= 0 then return end
 
   local cam = 0
@@ -127,11 +127,13 @@ function tick()
     end
   end
 
-  if d > 0 then
-    local vx, vy, vz, cw, nx, ny = w2smd(p0x, p0y, p0z)
-    log("f="..frame.." n="..nn.." d="..d.." cw="..math.floor(cw)..
-        " nx="..math.floor(nx).." ny="..math.floor(ny))
-  else
-    log("f="..frame.." n="..nn.." d=0")
+  if frame % 5 == 0 then
+    if d > 0 then
+      local vx, vy, vz, cw, nx, ny = w2smd(p0x, p0y, p0z)
+      log("f="..frame.." n="..nn.." d="..d.." cw="..math.floor(cw)..
+          " nx="..math.floor(nx).." ny="..math.floor(ny))
+    else
+      log("f="..frame.." n="..nn.." d=0")
+    end
   end
 end
