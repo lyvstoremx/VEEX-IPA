@@ -1,4 +1,4 @@
-// src/shell.m — VEEX build 133
+// src/shell.m — VEEX build 134
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
@@ -39,7 +39,7 @@ extern kern_return_t mach_vm_remap(vm_map_t target_task, uint64_t *address, uint
                                    uint64_t src_address, int copy, int *cur_protection,
                                    int *max_protection, int inheritance);
 
-#define VX_BUILD 133
+#define VX_BUILD 134
 #define VX_STAGE 0
 #define VX_BOOT 3
 #define VX_HOOKSET 5
@@ -182,7 +182,7 @@ static void vxHex(const char *hex, unsigned char *out, int len) {
 #define VX_TRAMP_SZ    (VX_TRAMP_SLOTS * VX_SLOT)
 #define VX_CAVE_SZ     8192
 #define VX_BH_MAX      4
-#define VX_GNEED       192
+#define VX_GNEED       64
 
 __attribute__((used, section("__TEXT,__vxcave")))
 static const uint8_t gCavePad[VX_CAVE_SZ] = {0};
@@ -447,28 +447,44 @@ static void vxSlotWrite(uint8_t *tr, const void *src, size_t n) {
     memcpy(tr, src, n);
 }
 
-static int vxIsPad(uint64_t a, size_t n) {
-    const uint32_t *p = (const uint32_t *)a;
-    for (size_t i = 0; i < n / 4; i++) {
-        uint32_t v = p[i];
-        if (v != 0 && v != 0x1F2003D5) return 0;
+static size_t vxRunLen(uint64_t a, uint64_t hi) {
+    size_t n = 0;
+    while (a + n + 4 <= hi && n < 640) {
+        uint32_t v = *(uint32_t *)(a + n);
+        if (v != 0 && v != 0x1F2003D5) break;
+        n += 4;
     }
-    return 1;
+    return n;
 }
 
 static uint8_t *vxFindCave(uint64_t near) {
-    if (!gBase || gSize < VX_GNEED) return NULL;
+    if (!gBase || gSize < VX_GNEED) {
+        vxLog(@"[VEEX] gc base=%llx size=%llx", gBase, gSize);
+        return NULL;
+    }
     uint64_t lo = gBase + 0x1000;
     uint64_t hi = gBase + gSize - VX_GNEED;
-    if (near < lo || near > hi) return NULL;
-    for (uint64_t d = 0x40; d < 0x600000; d += 4) {
+    vxLog(@"[VEEX] gc near=%llx lo=%llx hi=%llx", near, lo, hi);
+    if (near < lo || near > hi) { vxLog(@"[VEEX] gc fuera"); return NULL; }
+
+    uint64_t bestAt = 0;
+    size_t best = 0;
+    for (uint64_t d = 0x20; d < 0x1000000; d += 4) {
         uint64_t a = near + d;
-        if (a < hi && vxIsPad(a, VX_GNEED)) return (uint8_t *)a;
+        if (a < hi) {
+            size_t n = vxRunLen(a, hi);
+            if (n > best) { best = n; bestAt = a; if (n >= VX_GNEED) break; }
+        }
         if (near > d) {
             uint64_t b = near - d;
-            if (b > lo && vxIsPad(b, VX_GNEED)) return (uint8_t *)b;
+            if (b > lo) {
+                size_t n = vxRunLen(b, hi);
+                if (n > best) { best = n; bestAt = b; if (n >= VX_GNEED) break; }
+            }
         }
     }
+    vxLog(@"[VEEX] gc best=%zu at=%llx", best, bestAt);
+    if (best >= VX_GNEED) return (uint8_t *)bestAt;
     return NULL;
 }
 
@@ -658,8 +674,9 @@ static int vxInlineHook(void *target, void *rep, void **origOut) {
     size_t blen = (size_t)((uint8_t *)w - (uint8_t *)buf);
     uint32_t sb[4];
     vxEmitAbs(sb, (uint64_t)rep);
+    if (blen + 16 > VX_SLOT) return -26;
     vxSlotWrite(tr, buf, blen);
-    vxSlotWrite(tr + 96, sb, 16);
+    vxSlotWrite(tr + blen, sb, 16);
 
     uint64_t start = (uint64_t)target & ~(VX_PG - 1);
     uint64_t endp = ((uint64_t)target + 16 + VX_PG - 1) & ~(VX_PG - 1);
