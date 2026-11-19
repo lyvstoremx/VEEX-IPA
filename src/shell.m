@@ -1625,6 +1625,15 @@ static int l_w2s(lua_State *L) {
     return 3;
 }
 
+static int l_mat(lua_State *L) {
+    uint64_t f = (uint64_t)luaL_checkinteger(L, 1);
+    uint64_t o = (uint64_t)luaL_checkinteger(L, 2);
+    float m[16];
+    ((void (*)(float *, uint64_t))(uintptr_t)f)(m, o);
+    for (int i = 0; i < 16; i++) lua_pushnumber(L, m[i]);
+    return 16;
+}
+
 static void vxStopScript(void) { gRun = 0; }
 
 static void vxWipe(void) {
@@ -2063,6 +2072,7 @@ static void vxRegister(lua_State *L) {
     lua_register(L, "pos3", l_pos3); lua_register(L, "gete", l_gete);
     lua_register(L, "sete", l_sete); lua_register(L, "str", l_str);
     lua_register(L, "w2s", l_w2s);
+    lua_register(L, "mat", l_mat);
 }
 
 static void *vxRunThread(void *arg) {
