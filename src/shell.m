@@ -1,4 +1,4 @@
-// src/shell.m — VEEX build 141
+// src/shell.m — VEEX build 142
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
@@ -39,7 +39,7 @@ extern kern_return_t mach_vm_remap(vm_map_t target_task, uint64_t *address, uint
                                    uint64_t src_address, int copy, int *cur_protection,
                                    int *max_protection, int inheritance);
 
-#define VX_BUILD 141
+#define VX_BUILD 142
 #define VX_STAGE 0
 #define VX_BOOT 3
 #define VX_HOOKSET 5
@@ -127,7 +127,8 @@ static void vxKeep(NSString *s) {
         "[VEEX] pm ", "[VEEX] slotx", "[VEEX] mp=", "[VEEX] patched", "[VEEX] revertido",
         "[VEEX] anonx", "[VEEX] jit=", "[VEEX] sin tramp", "[VEEX] hooked", "[VEEX] F2",
         "[VEEX] w ", "[VEEX] wr", "[VEEX] xf", "[VEEX] xp=", "[VEEX] bh",
-        "[L] h1", "[L] n=", "[L] PROBE", "[L] VIVO", "[L] pl=", "[L] m="
+        "[L] h1", "[L] n=", "[L] PROBE", "[L] VIVO", "[L] pl=", "[L] m=",
+        "[L] V5", "[L] k=", "[L] cam=", "[L] d=", "[L] MW", "[L] MP"
     };
     const char *c = s.UTF8String;
     int hit = 0;
@@ -1636,6 +1637,89 @@ static int l_mat(lua_State *L) {
     return 16;
 }
 
+/* ---- proyeccion en C ---- */
+static float gMW[16];
+static float gMP[16];
+static int gCamOK = 0;
+static uint64_t gCamM = 0, gCamP = 0, gCamObj = 0;
+
+static void vxReadMat(uint64_t f, uint64_t o, float *dst) {
+    memset(dst, 0, 64);
+    if (!f || !o) return;
+    vx4x4 r = ((vx4x4 (*)(uint64_t))(uintptr_t)f)(o);
+    memcpy(dst, r.m, 64);
+}
+
+static int l_camset(lua_State *L) {
+    gCamM = (uint64_t)luaL_checkinteger(L, 1);
+    gCamP = (uint64_t)luaL_checkinteger(L, 2);
+    gCamObj = (uint64_t)luaL_checkinteger(L, 3);
+    vxLog(@"[L] camset m=%llx p=%llx o=%llx", gCamM, gCamP, gCamObj);
+    lua_pushboolean(L, (gCamM && gCamP && gCamObj) ? 1 : 0);
+    return 1;
+}
+
+static int l_camupd(lua_State *L) {
+    (void)L;
+    if (!gCamObj) { gCamOK = 0; return 0; }
+    vxReadMat(gCamM, gCamObj, gMW);
+    vxReadMat(gCamP, gCamObj, gMP);
+    gCamOK = 1;
+    return 0;
+}
+
+static int vxProjOne(lua_State *L, int rowmaj) {
+    float x = (float)luaL_checknumber(L, 1);
+    float y = (float)luaL_checknumber(L, 2);
+    float z = (float)luaL_checknumber(L, 3);
+    if (!gCamOK) { lua_pushnumber(L, 0); lua_pushnumber(L, 0); lua_pushboolean(L, 0); return 3; }
+
+    const float *V = gMW, *P = gMP;
+    float vx, vy, vz;
+    if (rowmaj) {
+        vx = V[0]*x + V[1]*y + V[2]*z + V[3];
+        vy = V[4]*x + V[5]*y + V[6]*z + V[7];
+        vz = V[8]*x + V[9]*y + V[10]*z + V[11];
+    } else {
+        vx = V[0]*x + V[4]*y + V[8]*z + V[12];
+        vy = V[1]*x + V[5]*y + V[9]*z + V[13];
+        vz = V[2]*x + V[6]*y + V[10]*z + V[14];
+    }
+    float cx, cy, cw;
+    if (rowmaj) {
+        cx = P[0]*vx + P[1]*vy + P[2]*vz + P[3];
+        cy = P[4]*vx + P[5]*vy + P[6]*vz + P[7];
+        cw = P[12]*vx + P[13]*vy + P[14]*vz + P[15];
+    } else {
+        cx = P[0]*vx + P[4]*vy + P[8]*vz + P[12];
+        cy = P[1]*vx + P[5]*vy + P[9]*vz + P[13];
+        cw = P[3]*vx + P[7]*vy + P[11]*vz + P[15];
+    }
+    if (cw < 0.01f) { lua_pushnumber(L, 0); lua_pushnumber(L, 0); lua_pushboolean(L, 0); return 3; }
+
+    float nx = cx / cw, ny = cy / cw;
+    CGFloat W = [UIScreen mainScreen].bounds.size.width;
+    CGFloat H = [UIScreen mainScreen].bounds.size.height;
+    lua_pushnumber(L, (nx * 0.5f + 0.5f) * W);
+    lua_pushnumber(L, (1.0f - (ny * 0.5f + 0.5f)) * H);
+    lua_pushboolean(L, (nx > -2.5 && nx < 2.5 && ny > -2.5 && ny < 2.5) ? 1 : 0);
+    return 3;
+}
+static int l_w2sm(lua_State *L) { return vxProjOne(L, 0); }
+static int l_w2smr(lua_State *L) { return vxProjOne(L, 1); }
+
+static int l_matdump(lua_State *L) {
+    (void)L;
+    char b[400]; int k = 0;
+    k = snprintf(b, sizeof b, "[L] MW");
+    for (int i = 0; i < 16; i++) k += snprintf(b + k, sizeof b - k, " %.3f", gMW[i]);
+    vxLog(@"%s", b);
+    k = snprintf(b, sizeof b, "[L] MP");
+    for (int i = 0; i < 16; i++) k += snprintf(b + k, sizeof b - k, " %.3f", gMP[i]);
+    vxLog(@"%s", b);
+    return 0;
+}
+
 static void vxStopScript(void) { gRun = 0; }
 
 static void vxWipe(void) {
@@ -2075,6 +2159,11 @@ static void vxRegister(lua_State *L) {
     lua_register(L, "sete", l_sete); lua_register(L, "str", l_str);
     lua_register(L, "w2s", l_w2s);
     lua_register(L, "mat", l_mat);
+    lua_register(L, "camset", l_camset);
+    lua_register(L, "camupd", l_camupd);
+    lua_register(L, "w2sm", l_w2sm);
+    lua_register(L, "w2smr", l_w2smr);
+    lua_register(L, "matdump", l_matdump);
 }
 
 static void *vxRunThread(void *arg) {
