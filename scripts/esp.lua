@@ -1,5 +1,5 @@
--- esp.lua V67
-log("V67 sw="..sw().." sh="..sh())
+-- esp.lua V68
+log("V68 sw="..sw().." sh="..sh())
 
 local ok = false
 local n = 0
@@ -7,6 +7,7 @@ local arr = 0
 local hArr = 0
 local objP = 0
 local hP = 0
+local selfE = 0
 local frame = 0
 local ticks = 0
 local lastTry = -999
@@ -28,6 +29,7 @@ local function drop()
   if hArr ~= 0 then gchf(hArr); hArr = 0 end
   arr = 0
   n = 0
+  selfE = 0
 end
 
 local function refresh()
@@ -80,7 +82,7 @@ local function setup()
       local mt = r64(e + 0x3e8)
       if mt and mt ~= 0 then
         local c = call(mGC, mt, objC)
-        if c and c ~= 0 then cam = c; break end
+        if c and c ~= 0 then cam = c; selfE = e; break end
       end
     end
   end
@@ -91,7 +93,7 @@ local function setup()
     camupd()
     matdump()
     setcfg("esp.on", 1)
-    log("esp forzado")
+    log("esp forzado self="..tostring(selfE))
     ok = true
   end
 end
@@ -134,12 +136,12 @@ function tick()
 
   for i = 0, nn - 1 do
     local e = arrat(arr, i)
-    if e ~= 0 and r64(e + 0x10) ~= 0 then
+    if e ~= 0 and e ~= selfE and r64(e + 0x10) ~= 0 then
       local tr = call(mGT, e)
       if tr and tr ~= 0 then
         local px, py, pz = gete(mGP, tr)
         local _, _, _, cw, nx, ny = w2smd(px, py, pz)
-        if cw > 2.0 then
+        if cw > 1.0 then
           d = d + 1
           if cw < near then near = cw end
           if on then
@@ -151,8 +153,8 @@ function tick()
               if bh > h * 0.5 then bh = h * 0.5 end
               local bw = bh * 0.45
               local by = sy - bh
-              if box then rect(sx - bw / 2, by, bw, bh, 0.1, 0.95, 0.35, 1) end
-              if ln then line(sx, sy, w / 2, h - 6, 0.95, 0.9, 0.15, 1) end
+              if box then rect(sx - bw / 2, by, bw, bh, 1, 0.15, 0.15, 1) end
+              if ln then line(sx, sy, w / 2, h - 6, 1, 1, 1, 0.85) end
               if nm then text("P"..i, sx - 9, by - 13, 1, 1, 1, 1) end
             end
           end
