@@ -1,4 +1,4 @@
--- PROBE50: cámara por GetComponent desde MainCameraTransform
+-- PROBE51: cámara válida y proyección
 local prep = false
 local camObj, mW2S, mGT, mGC, TR, Cam, PLC = nil, nil, nil, nil, nil, nil, nil
 
@@ -12,7 +12,7 @@ function tick()
   if prep then return end
   prep = true
 
-  log("V50")
+  log("V51")
   local fgt = sym("il2cpp_class_get_type")
   local fob = sym("il2cpp_type_get_object")
   local OK = i2c_class("UnityEngine", "Object")
@@ -49,29 +49,27 @@ function tick()
   if not alvo then return end
 
   local trc = r64(alvo + 0x3e8)
-  log("trc=" .. hex(trc))
-  if not trc or trc == 0 or not plaus(trc) then return end
-  log("kl(trc)=" .. hex(kl(trc)) .. " esTR=" .. tostring(kl(trc) == TR))
-  if kl(trc) ~= TR then return end
+  if not trc or trc == 0 or not plaus(trc) then log("sin trc") return end
+  if kl(trc) ~= TR then log("trc no es Transform") return end
 
   local cto = call(fob, call(fgt, Cam))
-  log("cto=" .. hex(cto))
-  if not cto then return end
   camObj = call(mGC, trc, cto)
   log("camObj=" .. hex(camObj))
   if not camObj or camObj == 0 or not plaus(camObj) then return end
-  log("kl(cam)=" .. hex(kl(camObj)) .. " esCam=" .. tostring(kl(camObj) == Cam))
-  if kl(camObj) ~= Cam then return end
+  if kl(camObj) ~= Cam then log("cam no es Camera") return end
 
   mW2S = i2c_mptr(Cam, "WorldToScreenPoint", 1)
   log("mW2S=" .. hex(mW2S))
   if not mW2S or mW2S == 0 then return end
 
-  local px, py, pz = pos3(mGT, nil)
   local tr = call(mGT, alvo)
+  log("tr=" .. hex(tr))
+  if not tr or tr == 0 or not plaus(tr) then return end
+
   local gm = i2c_mptr(TR, "get_position", 0)
   log("gm=" .. hex(gm))
-  if not gm or gm == 0 or not tr or tr == 0 then return end
+  if not gm or gm == 0 then return end
+
   local x, y, z = pos3(gm, tr)
   log("pos=" .. tostring(x) .. "," .. tostring(y) .. "," .. tostring(z))
   if not x then return end
@@ -79,11 +77,14 @@ function tick()
   local sx, sy, sz = w2s(mW2S, camObj, x, y, z)
   log("S=" .. tostring(sx) .. "," .. tostring(sy) .. " z=" .. tostring(sz))
   if not sx or not sz then return end
+
   clear()
   if sz > 0 then
     rect(sx - 20, sy - 80, 40, 80, 0, 1, 0.4, 1)
     text("X", sx - 4, sy + 2, 1, 1, 1, 1)
     log("DIBUJADO")
+  else
+    log("z<=0")
   end
-  log("FIN50")
+  log("FIN51")
 end
