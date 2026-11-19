@@ -1,4 +1,4 @@
-// src/shell.m — VEEX build 137
+// src/shell.m — VEEX build 138
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
@@ -39,7 +39,7 @@ extern kern_return_t mach_vm_remap(vm_map_t target_task, uint64_t *address, uint
                                    uint64_t src_address, int copy, int *cur_protection,
                                    int *max_protection, int inheritance);
 
-#define VX_BUILD 137
+#define VX_BUILD 138
 #define VX_STAGE 0
 #define VX_BOOT 3
 #define VX_HOOKSET 5
@@ -126,7 +126,7 @@ static void vxKeep(NSString *s) {
         "[VEEX] prep", "[VEEX] tramp", "[VEEX] cavex", "[VEEX] gcx", "[VEEX] xprot", "[VEEX] h1 ",
         "[VEEX] pm ", "[VEEX] slotx", "[VEEX] mp=", "[VEEX] patched", "[VEEX] revertido",
         "[VEEX] anonx", "[VEEX] jit=", "[VEEX] sin tramp", "[VEEX] hooked", "[VEEX] F2",
-        "[VEEX] w ", "[VEEX] bh", "[L] h1", "[L] n=", "[L] PROBE", "[L] VIVO",
+        "[VEEX] w ", "[VEEX] wr", "[VEEX] bh", "[L] h1", "[L] n=", "[L] PROBE", "[L] VIVO",
         "[L] pl=", "[L] m="
     };
     const char *c = s.UTF8String;
@@ -651,26 +651,28 @@ static int vxTrampExec(uint8_t *tr) {
         uint8_t *w = tr;
         for (int i = 0; i < gTrN; i++) if (gTrP[i] == tr) { w = gTrW[i]; break; }
         vxFlushPair(w, tr, VX_SLOT);
-        int p = vxProtOf(tr);
-        vxLog(@"[VEEX] xprot=%x", p);
-        return (p & VM_PROT_EXECUTE) ? 0 : -12;
+        int p6 = vxProtOf(tr);
+        vxLog(@"[VEEX] xprot=%x", p6);
+        return (p6 & VM_PROT_EXECUTE) ? 0 : -12;
     }
 
     vxFlush(tr, VX_SLOT);
     if (via == 2) { if (p_jitwp) p_jitwp(1); return 0; }
+
     int p = vxProtOf(tr);
-    if (via == 9) { vxLog(@"[VEEX] gcx=%x", p); return (p & VM_PROT_EXECUTE) ? 0 : -12; }
-    if (via == 7) { vxLog(@"[VEEX] cavex=%x", p); return (p & VM_PROT_EXECUTE) ? 0 : -12; }
+    if (via == 9) vxLog(@"[VEEX] gcx=%x", p);
+    if (via == 7) vxLog(@"[VEEX] cavex=%x", p);
     if (p & VM_PROT_EXECUTE) return 0;
 
     uint64_t pg = (uint64_t)tr & ~(VX_PG - 1);
     mprotect((void *)pg, VX_PG, PROT_READ | PROT_EXEC);
-    if (!(vxProtOf(tr) & VM_PROT_EXECUTE)) {
+    p = vxProtOf(tr);
+    if (!(p & VM_PROT_EXECUTE)) {
         vm_protect(mach_task_self(), pg, VX_PG, TRUE, VM_PROT_READ | VM_PROT_EXECUTE);
         vm_protect(mach_task_self(), pg, VX_PG, FALSE, VM_PROT_READ | VM_PROT_EXECUTE);
         vxFlush(tr, VX_SLOT);
+        p = vxProtOf(tr);
     }
-    p = vxProtOf(tr);
     vxLog(@"[VEEX] xp=%x", p);
     return (p & VM_PROT_EXECUTE) ? 0 : -12;
 }
@@ -742,8 +744,7 @@ static int vxInlineHook(void *target, void *rep, void **origOut) {
 
     memcpy(t, patch, 16);
     vxFlush(t, 16);
-    vxLog(@"[VEEX] wr %08x %08x rd %08x %08x", t[0], t[1], t[2], t[3],
-          *(volatile uint32_t *)t, *(volatile uint32_t *)((uint8_t *)t + 4));
+    vxLog(@"[VEEX] wr %08x %08x %08x %08x", t[0], t[1], t[2], t[3]);
 
     int x1 = vxTrampExec(tr);
     vxLog(@"[VEEX] slotx=%d prot=%x", x1, vxProtOf(tr));
