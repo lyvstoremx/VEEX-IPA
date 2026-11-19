@@ -1,12 +1,12 @@
--- esp.lua V59
-log("V59 sw="..sw().." sh="..sh())
+-- esp.lua V60
+log("V60 sw="..sw().." sh="..sh())
 
 local ok = false
 local n = 0
 local arr = 0
 local frame = 0
 local ticks = 0
-local mFOT, mGC, mGP, objT, objP
+local mFOT, mGP, mGT, objP
 
 local function boot_cfg()
   if ticks < 60 then return false end
@@ -36,21 +36,21 @@ local function setup()
   if not (fct and fto) then log("sin type"); return end
 
   objP = call(fto, call(fct, kP))
-  objT = call(fto, call(fct, kT))
   local objC = call(fto, call(fct, kM))
 
   mFOT = i2c_mptr(kO, "FindObjectsOfType", 1)
-  mGC = i2c_mptr(kC, "GetComponent", 1)
+  mGT = i2c_mptr(kC, "get_transform", 0)
   mGP = i2c_mptr(kT, "get_position", 0)
+  local mGC = i2c_mptr(kC, "GetComponent", 1)
   local mW = i2c_mptr(kM, "get_worldToCameraMatrix", 0)
   local mP = i2c_mptr(kM, "get_projectionMatrix", 0)
   if not mP then mP = i2c_mptr(kM, "get_projectionMatrix", 0) end
-  log("m="..tostring(mFOT).." "..tostring(mGC).." "..tostring(mW).." "..tostring(mP))
-  if not (mFOT and mGC and mGP and mW and mP) then return end
+  log("m="..tostring(mFOT).." "..tostring(mGT).." "..tostring(mW).." "..tostring(mP))
+  if not (mFOT and mGT and mGP and mW and mP) then return end
 
   arr = call(mFOT, objP)
   n = arrlen(arr)
-  log("n="..n.." t="..tostring(objP))
+  log("n="..n)
   if n <= 0 then return end
 
   local cam = 0
@@ -96,13 +96,12 @@ function tick()
   local nm = cfg("esp.name") == 1
   local ln = cfg("draw.line") == 1
   local d = 0
-  local p0x, p0y, p0z = 0, 0, 0
   local nn = n or 0
 
   for i = 0, nn - 1 do
     local e = arrat(arr, i)
     if e and e ~= 0 then
-      local tr = call(mGC, e, objT)
+      local tr = call(mGT, e)
       if tr and tr ~= 0 then
         local px, py, pz = gete(mGP, tr)
         if px > -9000 and px < 9000 then
@@ -110,7 +109,6 @@ function tick()
           local hx, hy, hv = w2sm(px, py + 180, pz)
           if fv and hv then
             d = d + 1
-            if d == 1 then p0x, p0y, p0z = px, py, pz end
             if on then
               local bh = math.abs(fy - hy)
               if bh < 12 then bh = 12 end
@@ -127,13 +125,24 @@ function tick()
     end
   end
 
-  if frame % 5 == 0 then
-    if d > 0 then
-      local vx, vy, vz, cw, nx, ny = w2smd(p0x, p0y, p0z)
-      log("f="..frame.." n="..nn.." d="..d.." cw="..math.floor(cw)..
-          " nx="..math.floor(nx).." ny="..math.floor(ny))
+  if frame % 20 == 0 then
+    local e0 = 0
+    local j = 0
+    while j < nn and e0 == 0 do e0 = arrat(arr, j); j = j + 1 end
+    if e0 and e0 ~= 0 then
+      local tr = call(mGT, e0)
+      if tr and tr ~= 0 then
+        local px, py, pz = gete(mGP, tr)
+        local vx, vy, vz, cw, nx, ny = w2smd(px, py, pz)
+        log("e0 d="..d.." tr="..tostring(tr)..
+            " p="..math.floor(px)..","..math.floor(py)..","..math.floor(pz)..
+            " v="..math.floor(vx)..","..math.floor(vy)..","..math.floor(vz)..
+            " cw="..math.floor(cw).." n="..math.floor(nx)..","..math.floor(ny))
+      else
+        log("e0 tr=0 d="..d)
+      end
     else
-      log("f="..frame.." n="..nn.." d=0")
+      log("e0 vacio")
     end
   end
 end
