@@ -1,4 +1,4 @@
-// src/shell.m — VEEX build 127
+// src/shell.m — VEEX build 128
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
@@ -39,7 +39,7 @@ extern kern_return_t mach_vm_remap(vm_map_t target_task, uint64_t *address, uint
                                    uint64_t src_address, int copy, int *cur_protection,
                                    int *max_protection, int inheritance);
 
-#define VX_BUILD 127
+#define VX_BUILD 128
 #define VX_STAGE 0
 #define VX_BOOT 3
 #define VX_HOOKSET 5
@@ -433,29 +433,46 @@ static int vxTrampPrep(uint8_t **out) {
 
     uint8_t *tr = NULL;
     int via = -1;
+    vm_size_t pgs = (vm_size_t)VX_PG;
 
-    if (p_jitwp) {
-        void *m = mmap(NULL, VX_PG, PROT_READ | PROT_WRITE,
-                       MAP_PRIVATE | MAP_ANON | MAP_JIT, -1, 0);
-        int em = errno;
-        vxLog(@"[VEEX] jit=%p e=%d", m, em);
-        if (m != MAP_FAILED) { p_jitwp(0); tr = (uint8_t *)m; via = 2; }
+    {
+        void *m = mmap(NULL, pgs, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+        if (m != MAP_FAILED) {
+            kern_return_t k1 = vm_protect(mach_task_self(), (vm_address_t)m, pgs, TRUE,
+                                          VM_PROT_READ | VM_PROT_EXECUTE);
+            kern_return_t k2 = vm_protect(mach_task_self(), (vm_address_t)m, pgs, FALSE,
+                                          VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXECUTE);
+            int p = vxProtOf(m);
+            vxLog(@"[VEEX] amx k1=%d k2=%d p=%x", (int)k1, (int)k2, p);
+            if (k1 == KERN_SUCCESS && k2 == KERN_SUCCESS && (p & VM_PROT_EXECUTE)) { tr = (uint8_t *)m; via = 4; }
+            else munmap(m, pgs);
+        }
     }
     if (!tr) {
-        void *m = mmap(NULL, VX_PG, PROT_READ | PROT_WRITE,
-                       MAP_PRIVATE | MAP_ANON, -1, 0);
-        int em = errno;
-        vxLog(@"[VEEX] anon=%p e=%d", m, em);
-        if (m != MAP_FAILED) { tr = (uint8_t *)m; via = 4; }
+        void *m = mmap(NULL, pgs, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_ANON, -1, 0);
+        if (m != MAP_FAILED) {
+            int p = vxProtOf(m);
+            vxLog(@"[VEEX] anonx p=%x", p);
+            if (p & VM_PROT_EXECUTE) { tr = (uint8_t *)m; via = 5; }
+            else munmap(m, pgs);
+        }
+    }
+    if (!tr && p_jitwp) {
+        void *m = mmap(NULL, pgs, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON | MAP_JIT, -1, 0);
+        if (m != MAP_FAILED) { p_jitwp(0); tr = (uint8_t *)m; via = 2; }
+        vxLog(@"[VEEX] jit=%p", m);
     }
     if (!tr) {
         vm_address_t a = 0;
-        if (vm_allocate(mach_task_self(), &a, VX_PG, VM_FLAGS_ANYWHERE) == KERN_SUCCESS &&
-            vm_protect(mach_task_self(), a, VX_PG, false, VM_PROT_READ | VM_PROT_WRITE) == KERN_SUCCESS) {
-            tr = (uint8_t *)a; via = 3;
+        if (vm_allocate(mach_task_self(), &a, pgs, VM_FLAGS_ANYWHERE) == KERN_SUCCESS) {
+            vm_protect(mach_task_self(), a, pgs, TRUE, VM_PROT_READ | VM_PROT_EXECUTE);
+            if (vm_protect(mach_task_self(), a, pgs, FALSE,
+                           VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXECUTE) == KERN_SUCCESS &&
+                (vxProtOf((void *)a) & VM_PROT_EXECUTE)) { tr = (uint8_t *)a; via = 3; }
+            else vm_deallocate(mach_task_self(), a, pgs);
         }
     }
-    if (!tr) return -11;
+    if (!tr) { vxLog(@"[VEEX] sin tramp"); return -11; }
 
     gTrP[gTrN] = tr; gTrW[gTrN] = tr; gTrV[gTrN] = via; gTrN++;
     *out = tr;
@@ -476,17 +493,18 @@ static int vxTrampExec(uint8_t *tr) {
 
     vxFlush(tr, VX_SLOT);
     if (via == 2) { if (p_jitwp) p_jitwp(1); return 0; }
+    if (vxProtOf(tr) & VM_PROT_EXECUTE) return 0;
 
     uint64_t pg = (uint64_t)tr & ~(VX_PG - 1);
-    int r = mprotect((void *)pg, VX_PG, PROT_READ | PROT_EXEC);
-    vxLog(@"[VEEX] mpr=%d p1=%x", r, vxProtOf(tr));
-    if (r != 0 || !(vxProtOf(tr) & VM_PROT_EXECUTE)) {
-        int v = vm_protect(mach_task_self(), pg, VX_PG, false,
-                           VM_PROT_READ | VM_PROT_EXECUTE | VM_PROT_COPY);
-        vxLog(@"[VEEX] vpr=%d p2=%x", v, vxProtOf(tr));
+    mprotect((void *)pg, VX_PG, PROT_READ | PROT_EXEC);
+    if (!(vxProtOf(tr) & VM_PROT_EXECUTE)) {
+        vm_protect(mach_task_self(), pg, VX_PG, TRUE, VM_PROT_READ | VM_PROT_EXECUTE);
+        vm_protect(mach_task_self(), pg, VX_PG, FALSE, VM_PROT_READ | VM_PROT_EXECUTE);
         vxFlush(tr, VX_SLOT);
     }
-    return 0;
+    int p = vxProtOf(tr);
+    vxLog(@"[VEEX] xp=%x", p);
+    return (p & VM_PROT_EXECUTE) ? 0 : -12;
 }
 
 static int vxBadInstr(uint32_t in) {
