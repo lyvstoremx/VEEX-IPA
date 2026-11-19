@@ -1,4 +1,4 @@
-// src/shell.m — VEEX build 136
+// src/shell.m — VEEX build 137
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
@@ -39,7 +39,7 @@ extern kern_return_t mach_vm_remap(vm_map_t target_task, uint64_t *address, uint
                                    uint64_t src_address, int copy, int *cur_protection,
                                    int *max_protection, int inheritance);
 
-#define VX_BUILD 136
+#define VX_BUILD 137
 #define VX_STAGE 0
 #define VX_BOOT 3
 #define VX_HOOKSET 5
@@ -183,6 +183,7 @@ static void vxHex(const char *hex, unsigned char *out, int len) {
 #define VX_CAVE_SZ     8192
 #define VX_BH_MAX      4
 #define VX_GNEED       64
+#define VX_GMAX        0x800000
 
 __attribute__((used, section("__TEXT,__vxcave")))
 static const uint8_t gCavePad[VX_CAVE_SZ] = {0};
@@ -311,7 +312,7 @@ static int vxMapTry(const char *path, uint64_t off, int shared, int initw, int h
     size_t len = (size_t)VX_PG * 2;
     int prot = PROT_READ | PROT_EXEC | (initw ? PROT_WRITE : 0);
     int flags = shared ? MAP_SHARED : MAP_PRIVATE;
-    uint32_t nop = 0x1F2003D5;
+    uint32_t nop = 0xD503201F;
     const int rwx = VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXECUTE;
 
     int fd = open(path, O_RDONLY);
@@ -451,57 +452,91 @@ static size_t vxRunLen(uint64_t a, uint64_t hi) {
     size_t n = 0;
     while (a + n + 4 <= hi && n < 640) {
         uint32_t v = *(uint32_t *)(a + n);
-        if (v != 0 && v != 0x1F2003D5) break;
+        if (v != 0 && v != 0xD503201F) break;
         n += 4;
     }
     return n;
 }
 
+typedef struct { uint64_t lo, hi; } vxSeg;
+
+static int vxSegs(uint64_t t, vxSeg *out, int cap) {
+    int n = 0;
+    vm_address_t a; vm_size_t s; mach_msg_type_number_t c; mach_port_t ob;
+    vm_region_basic_info_data_64_t bi;
+
+    a = t; s = 0; c = VM_REGION_BASIC_INFO_COUNT_64;
+    if (vm_region_64(mach_task_self(), &a, &s, VM_REGION_BASIC_INFO_64,
+                     (vm_region_info_t)&bi, &c, &ob) != KERN_SUCCESS) return 0;
+    if (!(bi.protection & VM_PROT_EXECUTE)) { vxLog(@"[VEEX] gc no exec"); return 0; }
+    out[n].lo = a; out[n].hi = a + s; n++;
+
+    uint64_t bl = a, bh = a + s;
+    a = bh;
+    while (n < cap && a < bl + VX_GMAX) {
+        s = 0; c = VM_REGION_BASIC_INFO_COUNT_64;
+        if (vm_region_64(mach_task_self(), &a, &s, VM_REGION_BASIC_INFO_64,
+                         (vm_region_info_t)&bi, &c, &ob) != KERN_SUCCESS) break;
+        if (!(bi.protection & VM_PROT_EXECUTE)) break;
+        if (a + s > bl + VX_GMAX) s = bl + VX_GMAX - a;
+        out[n].lo = a; out[n].hi = a + s; n++;
+        a = a + s;
+    }
+    a = (bl > VX_GMAX) ? bl - VX_GMAX : 0;
+    while (n < cap && a < bl) {
+        s = 0; c = VM_REGION_BASIC_INFO_COUNT_64;
+        if (vm_region_64(mach_task_self(), &a, &s, VM_REGION_BASIC_INFO_64,
+                         (vm_region_info_t)&bi, &c, &ob) != KERN_SUCCESS) break;
+        if (!(bi.protection & VM_PROT_EXECUTE)) break;
+        out[n].lo = a; out[n].hi = a + s; n++;
+        a = a + s;
+    }
+    return n;
+}
+
 static uint8_t *vxFindCave(void *target) {
-    Dl_info di;
-    if (!dladdr(target, &di) || !di.dli_fbase) {
-        vxLog(@"[VEEX] gc sin dladdr");
+    uint64_t t = (uint64_t)target;
+    Dl_info di; memset(&di, 0, sizeof di);
+    if (dladdr((void *)t, &di) == 0 || di.dli_fbase == NULL) {
+        vxLog(@"[VEEX] gc sin img");
         return NULL;
     }
-    const struct mach_header_64 *h = (const struct mach_header_64 *)di.dli_fbase;
-    if (h->magic != MH_MAGIC_64) { vxLog(@"[VEEX] gc magic %x", h->magic); return NULL; }
+    vxLog(@"[VEEX] gc img=%p near=%p", di.dli_fbase, (void *)t);
 
-    uint64_t vs = 0;
-    const struct load_command *lc = (const struct load_command *)(h + 1);
-    for (uint32_t i = 0; i < h->ncmds; i++) {
-        if (lc->cmd == LC_SEGMENT_64) {
-            const struct segment_command_64 *sg = (const struct segment_command_64 *)lc;
-            if (!strcmp(sg->segname, "__TEXT")) { vs = sg->vmsize; break; }
-        }
-        lc = (const struct load_command *)((uint8_t *)lc + lc->cmdsize);
-    }
-    if (vs < VX_GNEED * 2) { vxLog(@"[VEEX] gc text=%llx", vs); return NULL; }
+    vxSeg seg[32];
+    int n = vxSegs(t, seg, 32);
+    vxLog(@"[VEEX] gc segs=%d", n);
+    if (n == 0) return NULL;
 
-    uint64_t base = (uint64_t)h;
-    uint64_t lo = base + 0x1000;
-    uint64_t hi = base + vs - VX_GNEED;
-    uint64_t near = (uint64_t)target;
-    vxLog(@"[VEEX] gc img=%p text=%llx near=%llx lo=%llx hi=%llx", h, vs, near, lo, hi);
-    if (near < lo || near > hi) { vxLog(@"[VEEX] gc fuera"); return NULL; }
+    static const int needs[3] = { 64, 48, 32 };
+    uint64_t best = 0, bat = 0; int bk = 0;
 
-    uint64_t bestAt = 0;
-    size_t best = 0;
-    for (uint64_t d = 0x20; d < 0x2000000; d += 4) {
-        uint64_t a = near + d;
-        if (a < hi) {
-            size_t n = vxRunLen(a, hi);
-            if (n > best) { best = n; bestAt = a; if (n >= VX_GNEED) break; }
-        }
-        if (near > d) {
-            uint64_t b = near - d;
-            if (b > lo) {
-                size_t n = vxRunLen(b, hi);
-                if (n > best) { best = n; bestAt = b; if (n >= VX_GNEED) break; }
+    for (int ni = 0; ni < 3; ni++) {
+        int need = needs[ni];
+        for (int pass = 1; pass <= 2; pass++) {
+            uint32_t pat = (pass == 1) ? 0xD503201Fu : 0u;
+            for (int i = 0; i < n; i++) {
+                uint64_t s = (seg[i].lo + 0x10) & ~3ULL;
+                uint64_t e = seg[i].hi;
+                for (uint64_t a = s; a + (uint64_t)need <= e; a += 4) {
+                    if (a < t + 16 && a + (uint64_t)need > t) continue;
+                    if (*(volatile uint32_t *)a != pat) continue;
+                    uint64_t run = 4, b = a + 4;
+                    while (run < 64 && b + 4 <= e && *(volatile uint32_t *)b == pat) {
+                        run += 4; b += 4;
+                    }
+                    if (run > best) { best = run; bat = a; bk = pass; }
+                    if (run >= (uint64_t)need) {
+                        vxLog(@"[VEEX] gc hit=%p need=%d k=%d r=%llu d=%lld",
+                              (void *)a, need, pass, (unsigned long long)run,
+                              (long long)((int64_t)a - (int64_t)t));
+                        return (uint8_t *)a;
+                    }
+                }
             }
         }
     }
-    vxLog(@"[VEEX] gc best=%zu at=%llx", best, bestAt);
-    if (best >= VX_GNEED) return (uint8_t *)bestAt;
+    vxLog(@"[VEEX] gc nada best=%llu at=%p k=%d", (unsigned long long)best, (void *)bat, bk);
     return NULL;
 }
 
@@ -707,6 +742,8 @@ static int vxInlineHook(void *target, void *rep, void **origOut) {
 
     memcpy(t, patch, 16);
     vxFlush(t, 16);
+    vxLog(@"[VEEX] wr %08x %08x rd %08x %08x", t[0], t[1], t[2], t[3],
+          *(volatile uint32_t *)t, *(volatile uint32_t *)((uint8_t *)t + 4));
 
     int x1 = vxTrampExec(tr);
     vxLog(@"[VEEX] slotx=%d prot=%x", x1, vxProtOf(tr));
@@ -748,7 +785,6 @@ static void vxHookSym(const char *name, void *rep, void **origOut) {
     for (uint32_t i = 0; i < n; i++) {
         const struct mach_header_64 *h = (const struct mach_header_64 *)r_hdr(i);
         if (!h || h->magic != MH_MAGIC_64) continue;
-        if ((h->cpusubtype & 0xFF) == 2) vxLog(@"[VEEX] b e%u", i);
         intptr_t slide = r_slide(i);
         const struct load_command *lc = (const struct load_command *)(h + 1);
         for (uint32_t k = 0; k < h->ncmds; k++) {
