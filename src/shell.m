@@ -1,4 +1,4 @@
-// src/shell.m — VEEX build 144
+// src/shell.m — VEEX build 145
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
@@ -39,7 +39,7 @@ extern kern_return_t mach_vm_remap(vm_map_t target_task, uint64_t *address, uint
                                    uint64_t src_address, int copy, int *cur_protection,
                                    int *max_protection, int inheritance);
 
-#define VX_BUILD 144
+#define VX_BUILD 145
 #define VX_STAGE 0
 #define VX_BOOT 3
 #define VX_HOOKSET 5
@@ -1168,6 +1168,9 @@ static f_pc p_pc = NULL;
 static int gI2C = 0;
 static char gUnityPath[1024];
 
+static void *(*p_gchn)(void *, int) = NULL;
+static void (*p_gchf)(uint32_t) = NULL;
+
 static void vxFindUnityPath(void) {
     if (gUnityPath[0]) return;
     uint32_t n = _dyld_image_count();
@@ -1218,11 +1221,13 @@ static void vxLoadIL2CPP(void) {
     R("il2cpp_class_get_method_from_name", p_mf);
     R("il2cpp_object_get_class", p_kl);
     R("il2cpp_method_get_param_count", p_pc);
+    R("il2cpp_gchandle_new", p_gchn);
+    R("il2cpp_gchandle_free", p_gchf);
 #undef R
     int finder = (p_mf != NULL) || (p_ml && p_mn && p_pc);
     gI2C = p_dom && p_asms && p_img && p_cc && p_ci && p_cn && p_kl && finder;
-    if (gI2C) vxLog(@"[VEEX] il2cpp OK (%d/13, finder=%d)", got, p_mf ? 1 : 2);
-    else vxLog(@"[VEEX] il2cpp %d/13 falta=[%@]", got, @(miss));
+    if (gI2C) vxLog(@"[VEEX] il2cpp OK (%d/15, finder=%d)", got, p_mf ? 1 : 2);
+    else vxLog(@"[VEEX] il2cpp %d/15 falta=[%@]", got, @(miss));
 }
 
 typedef struct { int t; float x, y, w, h; float r, g, b, a; char s[72]; } vxCmd;
@@ -1406,6 +1411,19 @@ static int l_sptr(lua_State *L) {
     gStrBuf[255] = 0;
     lua_pushinteger(L, (lua_Integer)(uintptr_t)gStrBuf);
     return 1;
+}
+
+static int l_gch(lua_State *L) {
+    uint64_t o = (uint64_t)luaL_optinteger(L, 1, 0);
+    if (!o || !p_gchn) { lua_pushinteger(L, 0); return 1; }
+    void *h = p_gchn((void *)(uintptr_t)o, 0);
+    lua_pushinteger(L, (lua_Integer)(uintptr_t)h);
+    return 1;
+}
+static int l_gchf(lua_State *L) {
+    uint64_t h = (uint64_t)luaL_optinteger(L, 1, 0);
+    if (h && p_gchf) p_gchf((uint32_t)h);
+    return 0;
 }
 
 static int l_reset(lua_State *L) { (void)L; dispatch_async(dispatch_get_main_queue(), ^{ vxResetGuest(); }); return 0; }
@@ -2205,6 +2223,8 @@ static void vxRegister(lua_State *L) {
     lua_register(L, "w2smu", l_w2smu);
     lua_register(L, "w2smd", l_w2smd);
     lua_register(L, "matdump", l_matdump);
+    lua_register(L, "gch", l_gch);
+    lua_register(L, "gchf", l_gchf);
 }
 
 static void *vxRunThread(void *arg) {
@@ -2335,7 +2355,7 @@ static void vxBuildTab(void) {
         addRow(@"Esqueleto", @"draw.skel", y);
     } else if (gTab == 3) {
         addRow(@"Contador FPS", @"misc.fps", y); y += 36;
-        addRow(@"Mantener oculto", @"misc.hide", y); y += 36;
+        addRow(@"Velocidad", @"misc.speed", y); y += 36;
         addRow(@"Anti-captura", @"misc.anti", y);
     } else if (gTab == 4) {
         addRow(@"RESET GUEST", @"set.reset", y); y += 36;
