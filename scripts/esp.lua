@@ -25,7 +25,7 @@ function tick()
     t0 = os.time()
     log("hookm=" .. tostring(hookm(PLC, "UpdateKinematics", 2)))
     log("h1=" .. tostring(hook1(m)))
-    log("PROBE19 VIVO")
+    log("PROBE20 VIVO")
     return
   end
 
