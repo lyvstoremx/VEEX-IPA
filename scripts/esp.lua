@@ -1,5 +1,5 @@
--- esp.lua V61
-log("V61 sw="..sw().." sh="..sh())
+-- esp.lua V62
+log("V62 sw="..sw().." sh="..sh())
 
 local ok = false
 local n = 0
@@ -106,18 +106,22 @@ function tick()
         local px, py, pz = gete(mGP, tr)
         if px > -9000 and px < 9000 then
           local fx, fy, fv = w2sm(px, py, pz)
-          local hx, hy, hv = w2sm(px, py + 180, pz)
-          if fv and hv then
+          if fv then
             d = d + 1
             if on then
-              local bh = math.abs(fy - hy)
-              if bh < 14 then bh = 14 end
-              if bh > 400 then bh = 400 end
+              local hx, hy, hv = w2sm(px, py + 180, pz)
+              local by, bh, cx = fy - 60, 60, fx
+              if hv then
+                bh = math.abs(fy - hy)
+                if bh < 14 then bh = 14 end
+                if bh > 400 then bh = 400 end
+                by = hy
+                cx = (fx + hx) * 0.5
+              end
               local bw = bh * 0.55
-              local cx = (fx + hx) * 0.5
-              if box then rect(cx - bw / 2, hy, bw, bh, 0.1, 0.95, 0.35, 1) end
-              if ln then line(cx, hy + bh, w / 2, h - 6, 0.95, 0.9, 0.15, 1) end
-              if nm then text("P"..i, cx - 9, hy - 13, 1, 1, 1, 1) end
+              if box then rect(cx - bw / 2, by, bw, bh, 0.1, 0.95, 0.35, 1) end
+              if ln then line(cx, by + bh, w / 2, h - 6, 0.95, 0.9, 0.15, 1) end
+              if nm then text("P"..i, cx - 9, by - 13, 1, 1, 1, 1) end
             end
           end
         end
