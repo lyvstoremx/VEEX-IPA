@@ -1,5 +1,5 @@
--- esp.lua V57
-log("V57 sw="..sw().." sh="..sh())
+-- esp.lua V58
+log("V58 sw="..sw().." sh="..sh())
 
 local ok = false
 local n = 0
@@ -7,7 +7,6 @@ local arr = 0
 local frame = 0
 local ticks = 0
 local mFOT, mGC, mGP, objT
-local said = false
 
 local function boot_cfg()
   if ticks < 60 then return false end
@@ -92,16 +91,15 @@ function tick()
   line(w / 2 - 25, h / 2, 50, 0, 1, 0, 0, 1)
   line(w / 2, h / 2 - 25, 0, 50, 1, 0, 0, 1)
 
-  if not n or n <= 0 then return end
-
   local on = cfg("esp.on") == 1
   local box = cfg("esp.box") == 1
   local nm = cfg("esp.name") == 1
   local ln = cfg("draw.line") == 1
   local d = 0
   local p0x, p0y, p0z = 0, 0, 0
+  local nn = n or 0
 
-  for i = 0, n - 1 do
+  for i = 0, nn - 1 do
     local e = arrat(arr, i)
     if e and e ~= 0 then
       local tr = call(mGC, e, objT)
@@ -131,10 +129,9 @@ function tick()
 
   if d > 0 then
     local vx, vy, vz, cw, nx, ny = w2smd(p0x, p0y, p0z)
-    log("d="..d.."/"..n.." p="..math.floor(p0x)..","..math.floor(p0y)..","..math.floor(p0z)..
-        " v="..math.floor(vx)..","..math.floor(vy)..","..math.floor(vz)..
-        " cw="..math.floor(cw).." n="..math.floor(nx)..","..math.floor(ny))
+    log("f="..frame.." n="..nn.." d="..d.." cw="..math.floor(cw)..
+        " nx="..math.floor(nx).." ny="..math.floor(ny))
   else
-    log("d=0/"..n)
+    log("f="..frame.." n="..nn.." d=0")
   end
 end
