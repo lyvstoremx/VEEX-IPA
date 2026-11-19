@@ -1,5 +1,5 @@
--- esp.lua V69
-log("V69 sw="..sw().." sh="..sh())
+-- esp.lua V70
+log("V70 sw="..sw().." sh="..sh())
 
 local ok = false
 local n = 0
@@ -7,7 +7,6 @@ local arr = 0
 local hArr = 0
 local objP = 0
 local hP = 0
-local selfE = 0
 local camE = 0
 local hCam = 0
 local frame = 0
@@ -32,7 +31,6 @@ local function drop()
   if hCam ~= 0 then gchf(hCam); hCam = 0 end
   arr = 0
   n = 0
-  selfE = 0
   camE = 0
 end
 
@@ -86,7 +84,7 @@ local function setup()
       local mt = r64(e + 0x3e8)
       if mt and mt ~= 0 then
         local c = call(mGC, mt, objC)
-        if c and c ~= 0 then cam = c; selfE = e; break end
+        if c and c ~= 0 then cam = c; break end
       end
     end
   end
@@ -119,31 +117,23 @@ function tick()
   if frame % 8 == 0 then refresh() end
   if n <= 0 then ok = false; return end
 
-  local dead, nearI, nearCw = 0, -1, 99999
+  local dead = 0
   for i = 0, n - 1 do
     local e = arrat(arr, i)
-    if e == 0 or r64(e + 0x10) == 0 then
-      dead = dead + 1
-    else
-      local tr = call(mGT, e)
-      if tr and tr ~= 0 then
-        local px, py, pz = gete(mGP, tr)
-        local _, _, _, cw = w2smd(px, py, pz)
-        if cw > 0.5 and cw < nearCw then nearCw = cw; nearI = i end
-      end
-    end
+    if e == 0 or r64(e + 0x10) == 0 then dead = dead + 1 end
   end
-
   if dead * 2 > n then
     log("stale n="..n.." dead="..dead)
     ok = false
     return
   end
 
-  local hideI, hideE = -1, 0
-  if nearI >= 0 and nearCw < 3.5 then hideI = nearI else hideE = selfE end
-
   camupd()
+
+  local ctr = call(mGT, camE)
+  local cx, cy, cz = 0, 0, 0
+  if ctr and ctr ~= 0 then cx, cy, cz = gete(mGP, ctr) end
+
   clear()
 
   local w, h = sw(), sh()
@@ -161,26 +151,29 @@ function tick()
 
   for i = 0, nn - 1 do
     local e = arrat(arr, i)
-    if e ~= 0 and i ~= hideI and e ~= hideE and r64(e + 0x10) ~= 0 then
+    if e ~= 0 and r64(e + 0x10) ~= 0 then
       local tr = call(mGT, e)
       if tr and tr ~= 0 then
         local px, py, pz = gete(mGP, tr)
-        local _, _, _, cw, nx, ny = w2smd(px, py, pz)
-        if cw > 0.5 then
-          d = d + 1
-          if cw < near then near = cw end
-          if on then
-            local sx = (nx * 0.5 + 0.5) * w
-            local sy = (1 - (ny * 0.5 + 0.5)) * h
-            if sx > -120 and sx < w + 120 and sy > -60 and sy < h + 500 then
-              local bh = 660 / cw
-              if bh < 20 then bh = 20 end
-              if bh > h * 0.5 then bh = h * 0.5 end
-              local bw = bh * 0.45
-              local by = sy - bh
-              if box then rect(sx - bw / 2, by, bw, bh, 1, 0.15, 0.15, 1) end
-              if ln then line(sx, sy, w / 2, h - 6, 1, 1, 1, 0.85) end
-              if nm then text("P"..i, sx - 9, by - 13, 1, 1, 1, 1) end
+        local dx, dy, dz = px - cx, py - cy, pz - cz
+        if dx * dx + dy * dy + dz * dz > 9 then
+          local _, _, _, cw, nx, ny = w2smd(px, py, pz)
+          if cw > 0.5 then
+            d = d + 1
+            if cw < near then near = cw end
+            if on then
+              local sx = (nx * 0.5 + 0.5) * w
+              local sy = (1 - (ny * 0.5 + 0.5)) * h
+              if sx > -120 and sx < w + 120 and sy > -60 and sy < h + 500 then
+                local bh = 660 / cw
+                if bh < 20 then bh = 20 end
+                if bh > h * 0.5 then bh = h * 0.5 end
+                local bw = bh * 0.45
+                local by = sy - bh
+                if box then rect(sx - bw / 2, by, bw, bh, 1, 0.15, 0.15, 1) end
+                if ln then line(sx, by, w / 2 - sx, -by, 1, 1, 1, 0.85) end
+                if nm then text("P"..i, sx - 9, by - 13, 1, 1, 1, 1) end
+              end
             end
           end
         end
@@ -192,6 +185,6 @@ function tick()
 
   if frame % 20 == 0 then
     if near > 9999 then near = 0 end
-    log("f="..frame.." n="..nn.." d="..d.." dead="..dead.." self="..hideI.." cw="..math.floor(near))
+    log("f="..frame.." n="..nn.." d="..d.." dead="..dead.." cw="..math.floor(near))
   end
 end
