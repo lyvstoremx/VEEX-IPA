@@ -1,4 +1,4 @@
-// src/shell.m — VEEX build 142
+// src/shell.m — VEEX build 143
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
@@ -39,7 +39,7 @@ extern kern_return_t mach_vm_remap(vm_map_t target_task, uint64_t *address, uint
                                    uint64_t src_address, int copy, int *cur_protection,
                                    int *max_protection, int inheritance);
 
-#define VX_BUILD 142
+#define VX_BUILD 143
 #define VX_STAGE 0
 #define VX_BOOT 3
 #define VX_HOOKSET 5
@@ -128,7 +128,7 @@ static void vxKeep(NSString *s) {
         "[VEEX] anonx", "[VEEX] jit=", "[VEEX] sin tramp", "[VEEX] hooked", "[VEEX] F2",
         "[VEEX] w ", "[VEEX] wr", "[VEEX] xf", "[VEEX] xp=", "[VEEX] bh",
         "[L] h1", "[L] n=", "[L] PROBE", "[L] VIVO", "[L] pl=", "[L] m=",
-        "[L] V5", "[L] k=", "[L] cam=", "[L] d=", "[L] MW", "[L] MP"
+        "[L] V5", "[L] k=", "[L] cam=", "[L] d=", "[L] MW", "[L] MP", "[L] p=", "[L] first"
     };
     const char *c = s.UTF8String;
     int hit = 0;
@@ -1637,7 +1637,6 @@ static int l_mat(lua_State *L) {
     return 16;
 }
 
-/* ---- proyeccion en C ---- */
 static float gMW[16];
 static float gMP[16];
 static int gCamOK = 0;
@@ -1707,6 +1706,25 @@ static int vxProjOne(lua_State *L, int rowmaj) {
 }
 static int l_w2sm(lua_State *L) { return vxProjOne(L, 0); }
 static int l_w2smr(lua_State *L) { return vxProjOne(L, 1); }
+
+static int l_w2smd(lua_State *L) {
+    float x = (float)luaL_checknumber(L, 1);
+    float y = (float)luaL_checknumber(L, 2);
+    float z = (float)luaL_checknumber(L, 3);
+    if (!gCamOK) { for (int i = 0; i < 6; i++) lua_pushnumber(L, 0); return 6; }
+    const float *V = gMW, *P = gMP;
+    float vx = V[0]*x + V[4]*y + V[8]*z + V[12];
+    float vy = V[1]*x + V[5]*y + V[9]*z + V[13];
+    float vz = V[2]*x + V[6]*y + V[10]*z + V[14];
+    float cx = P[0]*vx + P[4]*vy + P[8]*vz + P[12];
+    float cy = P[1]*vx + P[5]*vy + P[9]*vz + P[13];
+    float cw = P[3]*vx + P[7]*vy + P[11]*vz + P[15];
+    float nx = 0, ny = 0;
+    if (cw > 0.0001f) { nx = cx / cw; ny = cy / cw; }
+    lua_pushnumber(L, vx); lua_pushnumber(L, vy); lua_pushnumber(L, vz);
+    lua_pushnumber(L, cw); lua_pushnumber(L, nx); lua_pushnumber(L, ny);
+    return 6;
+}
 
 static int l_matdump(lua_State *L) {
     (void)L;
@@ -1783,7 +1801,7 @@ static void vxResetGuest(void) {
     [@"1" writeToFile:flag atomically:YES encoding:NSUTF8StringEncoding error:NULL];
     [[NSUserDefaults standardUserDefaults] synchronize];
     vxLog(@"[VEEX] RESET escrito=%d", [[NSFileManager defaultManager] fileExistsAtPath:flag] ? 1 : 0);
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)),
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.0 * NSEC_PER_SEC)),
                    dispatch_get_main_queue(), ^{ exit(0); });
 }
 
@@ -2163,6 +2181,7 @@ static void vxRegister(lua_State *L) {
     lua_register(L, "camupd", l_camupd);
     lua_register(L, "w2sm", l_w2sm);
     lua_register(L, "w2smr", l_w2smr);
+    lua_register(L, "w2smd", l_w2smd);
     lua_register(L, "matdump", l_matdump);
 }
 
