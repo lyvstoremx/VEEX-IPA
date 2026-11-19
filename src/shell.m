@@ -203,7 +203,9 @@ static uint8_t *gTrW[VX_TR_MAX];
 static int gTrV[VX_TR_MAX];
 static int gTrN = 0;
 
-static uint64_t gBH[VX_BH_MAX][3];
+static volatile uint64_t gB0A, gB0B, gB1A, gB1B, gB2A, gB2B, gB3A, gB3B;
+static volatile uint64_t *gBInstr[VX_BH_MAX];
+static volatile uint64_t *gBAddr[VX_BH_MAX];
 static volatile int gBHN = 0;
 
 static void vxEmitAbs(uint32_t *w, uint64_t v) {
@@ -1733,7 +1735,7 @@ __attribute__((naked)) static void h_harvest(void) {
     );
 }
 
-#define VX_BSTUB(N, OFF) \
+#define VX_BSTUB(N) \
 __attribute__((naked, used)) static void vxB##N(void) { \
     __asm__ volatile( \
         "sub sp, sp, #160\n" \
@@ -1752,21 +1754,21 @@ __attribute__((naked, used)) static void vxB##N(void) { \
         "ldp x29, x30, [sp, #64]\n" \
         "ldr x8, [sp, #80]\n" \
         "add sp, sp, #160\n" \
-        "adrp x9, _gBH@PAGE\n" \
-        "add x9, x9, #OFF\n" \
-        "ldr x10, [x9, #0]\n" \
+        "adrp x9, _gB" #N "A@PAGE\n" \
+        "ldr x10, [x9, _gB" #N "A@PAGEOFF]\n" \
         "ubfx x11, x10, #10, #12\n" \
         "ubfx x12, x10, #22, #1\n" \
         "lsl x11, x11, x12\n" \
         "sub sp, sp, x11\n" \
-        "ldr x9, [x9, #8]\n" \
+        "adrp x9, _gB" #N "B@PAGE\n" \
+        "ldr x9, [x9, _gB" #N "B@PAGEOFF]\n" \
         "br x9\n" \
     ); \
 }
-VX_BSTUB(0, 0)
-VX_BSTUB(1, 24)
-VX_BSTUB(2, 48)
-VX_BSTUB(3, 72)
+VX_BSTUB(0)
+VX_BSTUB(1)
+VX_BSTUB(2)
+VX_BSTUB(3)
 
 static const uintptr_t gStubTbl[VX_BH_MAX] = {
     (uintptr_t)&vxB0, (uintptr_t)&vxB1, (uintptr_t)&vxB2, (uintptr_t)&vxB3
@@ -1794,8 +1796,8 @@ static int vxNearHook(void *target) {
     }
 
     int idx = gBHN++;
-    gBH[idx][0] = (uint64_t)i0;
-    gBH[idx][1] = (uint64_t)target + 4;
+    *gBInstr[idx] = (uint64_t)i0;
+    *gBAddr[idx] = (uint64_t)target + 4;
     uint32_t bl = 0x94000000u | (uint32_t)((d >> 2) & 0x03FFFFFF);
     t[0] = bl;
     vxFlush(t, 4);
@@ -2239,6 +2241,9 @@ static void vxProbeSelf(void) {
 
 __attribute__((constructor)) static void vxInit(void) {
     vxRaw("=== build %d: constructor entra ===", VX_BUILD);
+    gBInstr[0] = &gB0A; gBInstr[1] = &gB1A; gBInstr[2] = &gB2A; gBInstr[3] = &gB3A;
+    gBAddr[0] = &gB0B; gBAddr[1] = &gB1B; gBAddr[2] = &gB2B; gBAddr[3] = &gB3B;
+
     if (!p_icache) p_icache = (void (*)(void *, size_t))dlsym(RTLD_DEFAULT, "sys_icache_invalidate");
     if (!p_jitwp) p_jitwp = (int (*)(int))dlsym(RTLD_DEFAULT, "pthread_jit_write_protect_np");
     vxRaw("=== F1 icache=%p jitwp=%p ===", p_icache, p_jitwp);
