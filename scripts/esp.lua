@@ -1,4 +1,4 @@
--- PROBE37: caza del contenedor, instancia y estático por separado. Solo lectura.
+-- PROBE38: caza del contenedor, con validación de clase. Solo lectura.
 local step, t0, beat = 0, os.time(), 0
 local PLC, cands, seen, vis = nil, {}, {}, {}
 local mejor, mejorP = nil, 0
@@ -19,10 +19,21 @@ end
 local function objT(s)
   return string.find(s, "Manager") or string.find(s, "Facade") or string.find(s, "Scene")
       or string.find(s, "Battle") or string.find(s, "Entity") or string.find(s, "Replication")
+      or string.find(s, "Match")
+end
+
+local function esClase(k)
+  if not plaus(k) then return false end
+  local np = r64(k + 0x10)
+  if not plaus(np) then return false end
+  local c = r32(np)
+  if not c then return false end
+  local b = c % 256
+  return b >= 32 and b <= 126
 end
 
 local function esPlayer(k)
-  if not k or k == 0 then return false end
+  if not esClase(k) then return false end
   if k == PLC then return true end
   for _, p in ipairs(parents(k)) do
     if string.find(p, "Player") then return true end
@@ -41,6 +52,7 @@ end
 
 local function mirar(k, inst, prof)
   if not k or k == 0 or prof > 1 then return end
+  if not esClase(k) then return end
   local clave = k + (inst and 1 or 0) * 0x100000000
   if vis[clave] then return end
   vis[clave] = true
@@ -66,9 +78,11 @@ local function mirar(k, inst, prof)
       local o = sget(k, nm)
       if o and o ~= 0 and plaus(o) then
         local kk = kl(o)
-        if kk and kk ~= 0 then
+        if kk and kk ~= 0 and esClase(kk) then
           L("hop " .. nm .. "=" .. hex(o) .. " k=" .. hex(kk))
           mirar(kk, o, prof + 1)
+        else
+          L("skip " .. nm .. "=" .. hex(o) .. " k=" .. hex(kk))
         end
       end
     end
@@ -76,7 +90,7 @@ local function mirar(k, inst, prof)
 end
 
 function tick()
-  log("V37")
+  log("V38")
   if cfg("set.reset") == 1 then setcfg("set.reset", 0) reset() end
   if cfg("set.reload") == 1 then setcfg("set.reload", 0) reload() end
   if not i2c_ready() then return end
@@ -84,7 +98,7 @@ function tick()
   local ahora = os.time()
   if ahora - beat >= 5 then
     beat = ahora
-    log("VIVO37 t=" .. (ahora - t0) .. " s=" .. step .. " c=" .. #cands .. " l=" .. lineas)
+    log("VIVO38 t=" .. (ahora - t0) .. " s=" .. step .. " c=" .. #cands .. " l=" .. lineas)
   end
 
   if step == 0 then
@@ -93,7 +107,7 @@ function tick()
     log("pl=" .. hex(PLC))
     if not PLC then step = 9 return end
 
-    local qs = { "Player", "Entity", "Replication", "Manager", "BattleBoard", "Spawn", "Facade" }
+    local qs = { "Player", "Entity", "Replication", "Manager", "BattleBoard", "Spawn", "Facade", "Match" }
     for _, q in ipairs(qs) do
       local t = dump(q, 200)
       local n = 0
@@ -176,7 +190,7 @@ function tick()
         end
       end
     end
-    log("PROBE37 FIN")
+    log("PROBE38 FIN")
     step = 9
     return
   end
