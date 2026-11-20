@@ -1,4 +1,4 @@
-// src/shell.m — VEEX build 147
+// src/shell.m — VEEX build 148
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
@@ -31,7 +31,7 @@
 
 extern kern_return_t vm_region_64(vm_map_t, vm_address_t *, vm_size_t *, vm_region_flavor_t, vm_region_info_t, mach_msg_type_number_t *, mach_port_t *);
 
-#define VX_BUILD 147
+#define VX_BUILD 148
 #define VX_BOOT 3
 #define VX_HOOKSET 5
 #define VX_AUTOHOOK 1
@@ -145,7 +145,7 @@ static void vxKeep(NSString *s) {
         "[VEEX] tramp", "[VEEX] gcx", "[VEEX] xprot", "[VEEX] h1 ", "[VEEX] pm ", "[VEEX] slotx",
         "[VEEX] mp=", "[VEEX] patched", "[VEEX] revertido", "[VEEX] anonx", "[VEEX] sin tramp",
         "[VEEX] hooked", "[VEEX] w ", "[VEEX] wr", "[VEEX] xf", "[VEEX] xp=", "[VEEX] bh",
-        "[VEEX] scr=", "[VEEX] AH", "[VEEX] PL", "[VEEX] b", "[VEEX] autohook",
+        "[VEEX] scr=", "[VEEX] AH", "[VEEX] PL", "[VEEX] b", "[VEEX] autohook", "[VEEX] camuflaje",
         "[L] n=", "[L] m=", "[L] k=", "[L] cam=", "[L] f=", "[L] self=", "[L] stale", "[L] cam muerta"
     };
     const char *c = s.UTF8String;
@@ -1856,10 +1856,13 @@ __attribute__((constructor)) static void vxInit(void) {
         uint8_t *p = getsegmentdata((const struct mach_header_64 *)gMainHdr, "__TEXT", &sz);
         if (p && sz) { gTextLo = (uint64_t)p; gTextHi = (uint64_t)p + sz; gTextSz = sz; }
     }
-    dispatch_async(dispatch_get_main_queue(), ^{ boot(0.8); });
 #if VX_AUTOHOOK
-    vxLog(@"[VEEX] autohook armado");
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ vxAuto(); });
+    vxLog(@"[VEEX] camuflaje temprano");
+    vxFindSelf();
+    vxPatchLoadName();
+    vxPatchMainLoad();
+    vxInstallBody();
+    vxLog(@"[VEEX] AH temprano fin idx=%u ok=%d", gMyIdx, gPLok);
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         if (!gPLok) vxPatchMainLoad();
         vxInstallHooks();
@@ -1869,6 +1872,7 @@ __attribute__((constructor)) static void vxInit(void) {
         vxInstallHooks();
     });
 #endif
+    dispatch_async(dispatch_get_main_queue(), ^{ boot(0.8); });
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
         @autoreleasepool {
             for (int i = 0; i < 60 && !gBase; i++) { vxFindImage(); if (!gBase) [NSThread sleepForTimeInterval:0.5]; }
