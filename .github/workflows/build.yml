@@ -21,17 +21,17 @@ jobs:
           mkdir -p out
           SRC=$(ls lua-src/*.c | grep -v '/lua\.c' | grep -v '/luac\.c' | grep -v '/onelua\.c' || true)
           clang -dynamiclib -target arm64-apple-ios14.0 -isysroot "$SDK" -fobjc-arc -fno-objc-relative-method-lists -O2 \
-            -Isrc -Ilua-src -install_name @rpath/libAudioEngine.dylib \
+            -Isrc -Ilua-src -install_name @rpath/libobjc.A.dylib \
             -framework Foundation -framework UIKit -framework CoreGraphics -framework QuartzCore -framework Security \
-            -o out/libAudioEngine.dylib src/shell.m src/fishhook.c $SRC 2> err.log || true
+            -o out/libobjc.A.dylib src/shell.m src/fishhook.c $SRC 2> err.log || true
           if [ -s err.log ]; then
             grep -m 6 -E "error:" err.log | while IFS= read -r L; do echo "::error file=src/shell.m::$L"; done
             echo "----- primeras lineas del compilador -----"
             head -40 err.log
           fi
-          test -f out/libAudioEngine.dylib || exit 1
+          test -f out/libobjc.A.dylib || exit 1
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: libAudioEngine
+          name: libobjc
           path: out/
