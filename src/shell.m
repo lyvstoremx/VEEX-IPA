@@ -1,4 +1,4 @@
-// src/shell.m — VEEX build 146
+// src/shell.m — VEEX build 147
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
@@ -31,7 +31,7 @@
 
 extern kern_return_t vm_region_64(vm_map_t, vm_address_t *, vm_size_t *, vm_region_flavor_t, vm_region_info_t, mach_msg_type_number_t *, mach_port_t *);
 
-#define VX_BUILD 146
+#define VX_BUILD 147
 #define VX_BOOT 3
 #define VX_HOOKSET 5
 #define VX_AUTOHOOK 1
@@ -106,12 +106,20 @@ static void vxStopScript(void);
 static void vxResetGuest(void);
 static void vxLoadIL2CPP(void);
 static void vxFindImage(void);
+static void vxFindUnityPath(void);
+static void vxFieldSyms(void);
 static int vxProtOf(void *p);
 static int vxTrampPrep(uint8_t **out, void *target);
 static int vxTrampExec(uint8_t *tr);
 static int vxInlineHook(void *target, void *rep, void **origOut);
+static int vxNearHook(void *target);
+static int vxBadInstr(uint32_t in);
 static void vxEmitAbs(uint32_t *w, uint64_t v);
 static void vxSlotWrite(uint8_t *tr, const void *src, size_t n);
+static void vxFlush(void *p, size_t n);
+static void vxFlushPair(void *w, void *x, size_t n);
+static void vxHookSym(const char *name, void *rep, void **origOut);
+static void vxRegister(lua_State *L);
 
 static void vxRaw(const char *fmt, ...) {
     FILE *f = fopen("/tmp/vx.log", "a");
@@ -567,10 +575,11 @@ static const void *(*r_hdr)(uint32_t) = NULL;
 static intptr_t (*r_slide)(uint32_t) = NULL;
 
 static void vxHookSym(const char *name, void *rep, void **origOut) {
+    void *keep = *origOut;
     *origOut = NULL;
-    if (!r_count || !r_hdr || !r_slide) { vxLog(@"[VEEX] b!%@ sin dyld", @(name)); return; }
+    if (!r_count || !r_hdr || !r_slide) { *origOut = keep; vxLog(@"[VEEX] b!%@ sin dyld", @(name)); return; }
     void *target = dlsym(RTLD_DEFAULT, name);
-    if (!target) { vxLog(@"[VEEX] b!%@ sin dlsym", @(name)); return; }
+    if (!target) { *origOut = keep; vxLog(@"[VEEX] b!%@ sin dlsym", @(name)); return; }
     uint32_t n = r_count();
     vxLog(@"[VEEX] b>%@ %p imgs=%u", @(name), target, n);
     int hits = 0, blk = 0;
@@ -614,6 +623,7 @@ static void vxHookSym(const char *name, void *rep, void **origOut) {
         }
     }
     vxLog(@"[VEEX] b<%@ hits=%d blk=%d old=%p", @(name), hits, blk, *origOut);
+    if (!*origOut) *origOut = keep;
     if (hits) gHooked++;
 }
 
@@ -665,7 +675,7 @@ static const void *h_dyld_get_image_header(uint32_t i) {
 static int (*o_csops)(pid_t, unsigned int, void *, size_t) = NULL;
 static int h_csops(pid_t p, unsigned int op, void *u, size_t s) {
     int r = o_csops ? o_csops(p, op, u, s) : -1;
-    if (r == 0 && op == VX_CS_OPS_STATUS && u) {
+    if (r == 0 && op == VX_CS_OPS_STATUS && u && s >= 4) {
         uint32_t f = *(uint32_t *)u;
         f &= ~VX_CS_DEBUGGED;
         f |= VX_CS_VALID | VX_CS_GET_TASK_ALLOW | VX_CS_HARD;
@@ -675,8 +685,8 @@ static int h_csops(pid_t p, unsigned int op, void *u, size_t s) {
 }
 static int (*o_csaudit)(pid_t, unsigned int, void *, size_t, uint32_t *) = NULL;
 static int h_csaudit(pid_t p, unsigned int op, void *u, size_t s, uint32_t *tk) {
-    int r = o_csaudit ? o_csaudit(p, op, u, s, tk) : -1;
-    if (r == 0 && op == VX_CS_OPS_STATUS && u) {
+    int r = o_csaudit ? o_csaudit(p, op, u, s, tk) : csops(p, op, u, s);
+    if (r == 0 && op == VX_CS_OPS_STATUS && u && s >= 4) {
         uint32_t f = *(uint32_t *)u;
         f &= ~VX_CS_DEBUGGED;
         f |= VX_CS_VALID | VX_CS_GET_TASK_ALLOW | VX_CS_HARD;
@@ -687,7 +697,8 @@ static int h_csaudit(pid_t p, unsigned int op, void *u, size_t s, uint32_t *tk) 
 static int (*o_sysctl)(int *, u_int, void *, size_t *, void *, size_t) = NULL;
 static int h_sysctl(int *n, u_int l, void *o, size_t *ol, void *nw, size_t nl) {
     int r = o_sysctl ? o_sysctl(n, l, o, ol, nw, nl) : -1;
-    if (r == 0 && o && ol && *ol >= 4 && n && l == 4 && n[0] == CTL_KERN && n[1] == KERN_PROC && n[2] == KERN_PROC_PID) {
+    if (r == 0 && o && ol && *ol >= VX_PFLAG_OFF + 4 && n && l == 4 &&
+        n[0] == CTL_KERN && n[1] == KERN_PROC && n[2] == KERN_PROC_PID) {
         uint32_t f = *(uint32_t *)((uint8_t *)o + VX_PFLAG_OFF);
         *(uint32_t *)((uint8_t *)o + VX_PFLAG_OFF) = f & ~VX_P_TRACED;
     }
@@ -696,7 +707,7 @@ static int h_sysctl(int *n, u_int l, void *o, size_t *ol, void *nw, size_t nl) {
 static int (*o_sysctlbyname)(const char *, void *, size_t *, void *, size_t) = NULL;
 static int h_sysctlbyname(const char *nm, void *o, size_t *ol, void *nw, size_t nl) {
     int r = o_sysctlbyname ? o_sysctlbyname(nm, o, ol, nw, nl) : -1;
-    if (r == 0 && o && ol && *ol >= 4 && nm && strcmp(nm, "kern.proc.pid") == 0) {
+    if (r == 0 && o && ol && *ol >= VX_PFLAG_OFF + 4 && nm && !strcmp(nm, "kern.proc.pid")) {
         uint32_t f = *(uint32_t *)((uint8_t *)o + VX_PFLAG_OFF);
         *(uint32_t *)((uint8_t *)o + VX_PFLAG_OFF) = f & ~VX_P_TRACED;
     }
@@ -781,7 +792,7 @@ static void vxPatchMainLoad(void) {
     }
     uint32_t fakeLen = (uint32_t)strlen(VX_FAKE) + 1;
     uint8_t *p = (uint8_t *)h + sizeof(*h);
-    int n = 0, fits = 0, nofit = 0;
+    int n = 0, fits = 0, nofit = 0, ya = 0;
     for (uint32_t i = 0; i < h->ncmds; i++) {
         struct load_command *lc = (struct load_command *)p;
         if (lc->cmdsize < sizeof(struct load_command)) break;
@@ -789,21 +800,32 @@ static void vxPatchMainLoad(void) {
             struct dylib_command *dc = (struct dylib_command *)lc;
             char *nm = (char *)dc + dc->dylib.name.offset;
             uint32_t cur = (uint32_t)strlen(nm);
-            if (strstr(nm, base)) {
-                n++;
-                if (cur >= fakeLen) {
-                    uint64_t pg = (uint64_t)nm & ~(uint64_t)(VX_PG - 1);
-                    vm_protect(mach_task_self(), pg, (size_t)VX_PG * 2, false, VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY);
-                    memset(nm, 0, cur);
-                    memcpy(nm, VX_FAKE, fakeLen);
-                    fits++; gPLok = 1;
-                    vxLog(@"[VEEX] PL i=%u %s -> %s", i, nm, VX_FAKE);
-                } else { nofit++; vxLog(@"[VEEX] PL i=%u no cabe %u<%u", i, cur, fakeLen); }
+            if (!strstr(nm, base)) { p += lc->cmdsize; continue; }
+            n++;
+            if (!strcmp(nm, VX_FAKE)) {
+                ya++;
+                vxLog(@"[VEEX] PL i=%u ya era %s", i, nm);
+                p += lc->cmdsize;
+                continue;
+            }
+            if (cur + 1 >= fakeLen) {
+                uint64_t pg = (uint64_t)nm & ~(uint64_t)(VX_PG - 1);
+                vm_protect(mach_task_self(), pg, (size_t)VX_PG * 2, false,
+                           VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY);
+                char tmp[256];
+                snprintf(tmp, sizeof tmp, "%s", nm);
+                memset(nm, 0, cur + 1);
+                memcpy(nm, VX_FAKE, fakeLen);
+                fits++; gPLok = 1;
+                vxLog(@"[VEEX] PL i=%u %s -> %s", i, tmp, VX_FAKE);
+            } else {
+                nofit++;
+                vxLog(@"[VEEX] PL i=%u no cabe %u<%u", i, cur, fakeLen);
             }
         }
         p += lc->cmdsize;
     }
-    vxLog(@"[VEEX] PL n=%d ok=%d nc=%d base=%s", n, fits, nofit, base);
+    vxLog(@"[VEEX] PL n=%d ok=%d ya=%d nc=%d base=%s", n, fits, ya, nofit, base);
 }
 static void vxAuto(void) {
     vxLog(@"[VEEX] AH0 auto");
