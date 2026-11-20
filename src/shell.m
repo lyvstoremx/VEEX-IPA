@@ -1,4 +1,4 @@
-// VEEX shell build 154 — MODO CERO + DESENGANCHE DE IMAGEN
+// VEEX shell build 155 — DESENGANCHE con página escribible
 // Sin ventana, sin ganchos, sin migración, sin script.
 
 #import <Foundation/Foundation.h>
@@ -12,12 +12,13 @@
 #import <sys/proc.h>
 #import <sys/utsname.h>
 #import <unistd.h>
+#import <fcntl.h>
 #include <dlfcn.h>
 #include <string.h>
 #include <stdio.h>
 #include <stdarg.h>
 
-#define VX_BUILD 154
+#define VX_BUILD 155
 
 extern int csops(pid_t pid, unsigned int ops, void *useraddr, size_t usersize);
 #define VX_CS_OPS_STATUS 0
@@ -38,6 +39,21 @@ static void vxLog(NSString *fmt, ...) {
         if (!f) continue;
         fputs(line.UTF8String, f);
         fclose(f);
+    }
+}
+
+static void vxRaw(const char *fmt, ...) {
+    char b[512];
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vsnprintf(b, sizeof(b), fmt, ap);
+    va_end(ap);
+    if (n <= 0) return;
+    for (int i = 0; i < gLogN; i++) {
+        int fd = open(gLog[i], O_WRONLY | O_APPEND | O_CREAT, 0644);
+        if (fd < 0) continue;
+        write(fd, b, (size_t)n);
+        close(fd);
     }
 }
 
@@ -73,34 +89,37 @@ static struct dyld_all_image_infos *vxInfos(void) {
     return (struct dyld_all_image_infos *)tdi.all_image_info_addr;
 }
 
+static kern_return_t vxWritable(void *addr, size_t len) {
+    vm_address_t a = (vm_address_t)addr & ~((vm_address_t)vm_page_size - 1);
+    size_t off = (vm_address_t)addr - a;
+    size_t sz = ((off + len + vm_page_size - 1) / vm_page_size) * vm_page_size;
+    return vm_protect(mach_task_self(), a, sz, FALSE,
+                      VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY);
+}
+
 static void vxUnlink(void) {
     const struct mach_header_64 *h = vxHdr();
     struct dyld_all_image_infos *inf = vxInfos();
-    if (!h || !inf) { vxLog(@"unl sin datos h=%d inf=%d", h ? 1 : 0, inf ? 1 : 0); return; }
+    if (!h || !inf) { vxRaw("[%d] unl sin datos h=%d inf=%d\n", VX_BUILD, h ? 1 : 0, inf ? 1 : 0); return; }
 
     struct dyld_image_info *arr = (struct dyld_image_info *)inf->infoArray;
     uint32_t n = inf->infoArrayCount;
-    if (!arr || n < 2) { vxLog(@"unl arr raro n=%u", n); return; }
+    if (!arr || n < 2) { vxRaw("[%d] unl arr raro n=%u\n", VX_BUILD, n); return; }
 
     int idx = -1;
     for (uint32_t i = 0; i < n; i++)
         if (arr[i].imageLoadAddress == (const struct mach_header *)h) { idx = (int)i; break; }
-    if (idx < 0) { vxLog(@"unl no estoy"); return; }
+    if (idx < 0) { vxRaw("[%d] unl no estoy\n", VX_BUILD); return; }
+
+    kern_return_t k1 = vxWritable(arr, (size_t)n * sizeof(struct dyld_image_info));
+    kern_return_t k2 = vxWritable(&inf->infoArrayCount, sizeof(uint32_t));
+    vxRaw("[%d] unl prot arr=%d cnt=%d idx=%d n=%u\n", VX_BUILD, (int)k1, (int)k2, idx, n);
+    if (k1 != KERN_SUCCESS) { vxRaw("[%d] unl aborto\n", VX_BUILD); return; }
 
     for (uint32_t i = (uint32_t)idx; i + 1 < n; i++) arr[i] = arr[i + 1];
     inf->infoArrayCount = n - 1;
-    inf->infoArrayChangeTimestamp = 1;
 
-    vxLog(@"unl idx=%d n=%u -> %u", idx, n, inf->infoArrayCount);
-}
-
-static void vxImgs(void) {
-    uint32_t n = _dyld_image_count();
-    uint32_t lim = n < 6 ? n : 6;
-    for (uint32_t i = 0; i < lim; i++) {
-        const char *p = _dyld_get_image_name(i);
-        vxLog(@"i%u %s", i, p ? p : "?");
-    }
+    vxRaw("[%d] unl ok n=%u\n", VX_BUILD, inf->infoArrayCount);
 }
 
 static void vxFlags(void) {
@@ -124,22 +143,20 @@ static void vxRun(void) {
     struct utsname u; memset(&u, 0, sizeof(u)); uname(&u);
     Dl_info di; memset(&di, 0, sizeof(di)); dladdr((void *)&vxHdr, &di);
 
-    vxLog(@"==== arranque desenganche ====");
+    vxLog(@"==== arranque desenganche 2 ====");
     vxLog(@"ios=%@ hw=%s", UIDevice.currentDevice.systemVersion, u.machine);
     vxLog(@"path=%s", di.dli_fname ? di.dli_fname : "?");
     vxFlags();
-    vxImgs();
 
-    vxLog(@"antes=%u self=%d", _dyld_image_count(), vxSelfIndex());
+    vxRaw("[%d] antes=%u self=%d\n", VX_BUILD, _dyld_image_count(), vxSelfIndex());
     vxUnlink();
-    vxLog(@"despues=%u self=%d", _dyld_image_count(), vxSelfIndex());
-    vxImgs();
+    vxRaw("[%d] despues=%u self=%d\n", VX_BUILD, _dyld_image_count(), vxSelfIndex());
 
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 5ull * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
-        vxLog(@"vivo 5s");
+        vxRaw("[%d] vivo 5s n=%u self=%d\n", VX_BUILD, _dyld_image_count(), vxSelfIndex());
     });
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 15ull * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
-        vxLog(@"vivo 15s fin");
+        vxRaw("[%d] vivo 15s fin\n", VX_BUILD);
     });
 }
 
