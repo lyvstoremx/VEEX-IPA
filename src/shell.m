@@ -6,11 +6,10 @@
 #import <UIKit/UIKit.h>
 #import <mach-o/dyld.h>
 #import <mach-o/loader.h>
-#import <mach/mach.h>
-#import <mach/mach_vm.h>
-#import <mach/vm_region.h>
 #import <sys/sysctl.h>
+#import <sys/proc.h>
 #import <sys/utsname.h>
+#import <unistd.h>
 #import <CommonCrypto/CommonDigest.h>
 #include <dlfcn.h>
 #include <string.h>
@@ -152,14 +151,17 @@ static void vxRun(void) {
     vxLog(@"path=%s", di.dli_fname ? di.dli_fname : "?");
     vxFlags();
 
+    NSString *bh = [NSString stringWithUTF8String:VX_H];
+    NSString *bc = [NSString stringWithUTF8String:VX_CD];
+
     const struct mach_header_64 *h = vxHdr();
     uintptr_t ta = 0; size_t tl = 0;
     if (h && vxTextRange(h, &ta, &tl)) {
         vxLog(@"txt=0x%lx len=%zu", (unsigned long)ta, tl);
         NSString *mh = vxSHA256(ta, tl);
         NSString *mc = vxCDHash(h);
-        vxLog(@"HS h %@ %@", mh ?: @"-", [mh isEqualToString:@(VX_H)] ? @"SI" : @"NO");
-        vxLog(@"HS cd %@ %@", mc ?: @"-", [mc isEqualToString:@(VX_CD)] ? @"SI" : @"NO");
+        vxLog(@"HS h %@ %@", mh ?: @"-", [mh isEqualToString:bh] ? @"SI" : @"NO");
+        vxLog(@"HS cd %@ %@", mc ?: @"-", [mc isEqualToString:bc] ? @"SI" : @"NO");
     } else {
         vxLog(@"txt=err");
     }
