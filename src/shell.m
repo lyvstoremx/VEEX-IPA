@@ -1,14 +1,15 @@
-// VEEX shell build 159 — mapa de segmentos del binario principal
-// No engancha nada.
+// VEEX shell build 161 — localizar binarios del bundle
+// No engancha.
 
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <mach-o/dyld.h>
 #import <mach-o/loader.h>
+#include <dlfcn.h>
 #include <string.h>
 #include <stdio.h>
 
-#define VX_BUILD 159
+#define VX_BUILD 161
 
 static NSString *vxDoc(void) {
     return NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
@@ -22,23 +23,41 @@ static void vxLog(NSString *s) {
     fclose(f);
 }
 
-static void vxRun(void) {
-    const struct mach_header_64 *mh = (const void *)_dyld_get_image_header(0);
-    vxLog(@"==== mapa ====");
-    if (!mh) { vxLog(@"sin cabecera"); return; }
-    vxLog([NSString stringWithFormat:@"magic=%x cpu=%x sub=%x ncmds=%u flags=%x",
-           mh->magic, mh->cputype, mh->cpusubtype, mh->ncmds, mh->flags]);
-
-    const struct load_command *lc = (const void *)(mh + 1);
-    for (uint32_t i = 0; i < mh->ncmds; i++) {
-        if (lc->cmdsize < 8) { vxLog(@"cmd roto"); break; }
+static uint64_t vxSize(const struct mach_header_64 *h) {
+    uint64_t t = 0;
+    const struct load_command *lc = (const void *)(h + 1);
+    for (uint32_t i = 0; i < h->ncmds; i++) {
+        if (lc->cmdsize < 8) break;
         if (lc->cmd == LC_SEGMENT_64) {
             const struct segment_command_64 *sg = (const void *)lc;
-            vxLog([NSString stringWithFormat:@"seg %s vm=%llx vs=%llu fo=%llu fs=%llu ns=%u",
-                   sg->segname, sg->vmaddr, sg->vmsize, sg->fileoff, sg->filesize, sg->nsects]);
+            if (!strcmp(sg->segname, "__TEXT")) t += sg->filesize;
+            if (!strcmp(sg->segname, "__TEXT_EXEC")) t += sg->filesize;
+            if (!strcmp(sg->segname, "__DATA")) t += sg->filesize;
         }
         lc = (const void *)((const char *)lc + lc->cmdsize);
     }
+    return t;
+}
+
+static void vxRun(void) {
+    const struct mach_header_64 *me = NULL;
+    { Dl_info i; if (dladdr((void *)&vxRun, &i)) me = i.dli_fbase; }
+
+    uint32_t n = _dyld_image_count();
+    vxLog([NSString stringWithFormat:@"==== bundle ==== imgs=%u", n]);
+
+    int hits = 0;
+    for (uint32_t i = 0; i < n; i++) {
+        const char *p = _dyld_get_image_name(i);
+        if (!p || !strstr(p, "FreeFire.app")) continue;
+        const struct mach_header_64 *h = (const void *)_dyld_get_image_header(i);
+        if (!h || h == me) continue;
+        vxLog([NSString stringWithFormat:@"%u sz=%llu magic=%x %s",
+               i, vxSize(h), h->magic, p]);
+        hits++;
+        if (hits >= 12) break;
+    }
+    vxLog([NSString stringWithFormat:@"hits=%d", hits]);
 }
 
 __attribute__((constructor))
