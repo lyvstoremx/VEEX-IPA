@@ -1,4 +1,4 @@
-// src/shell.m — VEEX build 145
+// src/shell.m — VEEX build 146
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
@@ -39,11 +39,11 @@ extern kern_return_t mach_vm_remap(vm_map_t target_task, uint64_t *address, uint
                                    uint64_t src_address, int copy, int *cur_protection,
                                    int *max_protection, int inheritance);
 
-#define VX_BUILD 145
+#define VX_BUILD 146
 #define VX_STAGE 0
 #define VX_BOOT 3
 #define VX_HOOKSET 5
-#define VX_AUTOHOOK 0
+#define VX_AUTOHOOK 1
 #define VX_FPS 20
 
 #define SCRIPT_URL @"https://raw.githubusercontent.com/lyvstoremx/VEEX-IPA/main/scripts/esp.lua"
@@ -89,7 +89,8 @@ static double gLastPb = 0;
 static uint64_t gTextLo = 0, gTextHi = 0, gTextSz = 0;
 static volatile int gHitMd5 = 0, gHitSha1 = 0, gHitSha256 = 0, gForced = 0;
 static volatile int gBodies = 0;
-static int gInstalled = 0;
+static volatile int gPLok = 0;
+static int gInstallTries = 0;
 static int gFails = 0;
 
 static void vxRaw(const char *fmt, ...) {
@@ -127,8 +128,10 @@ static void vxKeep(NSString *s) {
         "[VEEX] pm ", "[VEEX] slotx", "[VEEX] mp=", "[VEEX] patched", "[VEEX] revertido",
         "[VEEX] anonx", "[VEEX] jit=", "[VEEX] sin tramp", "[VEEX] hooked", "[VEEX] F2",
         "[VEEX] w ", "[VEEX] wr", "[VEEX] xf", "[VEEX] xp=", "[VEEX] bh", "[VEEX] scr=",
+        "[VEEX] AH", "[VEEX] PL", "[VEEX] b",
         "[L] h1", "[L] n=", "[L] PROBE", "[L] VIVO", "[L] pl=", "[L] m=",
-        "[L] V5", "[L] V6", "[L] k=", "[L] cam=", "[L] d=", "[L] MW", "[L] MP", "[L] p=", "[L] f="
+        "[L] V5", "[L] V6", "[L] k=", "[L] cam=", "[L] d=", "[L] MW", "[L] MP", "[L] p=", "[L] f=",
+        "[L] self=", "[L] stale", "[L] cam muerta"
     };
     const char *c = s.UTF8String;
     int hit = 0;
@@ -284,7 +287,6 @@ static int vxProtOf(void *p) {
                      (vm_region_info_t)&info, &cnt, &obj) != KERN_SUCCESS) return -1;
     return (int)info.protection;
 }
-
 static void vxEnvProbe(void) {
     void *sec = dlopen("/System/Library/Frameworks/Security.framework/Security", RTLD_NOW);
     if (!sec) { vxRaw("=== sec nulo ==="); return; }
@@ -965,8 +967,8 @@ static void vxCsLog(const char *tag) {
 }
 
 static void vxInstallHooks(void) {
-    if (gInstalled) return;
-    gInstalled = 1;
+    if (gInstallTries >= 2) return;
+    gInstallTries++;
     if (!p_icache) p_icache = (void (*)(void *, size_t))dlsym(RTLD_DEFAULT, "sys_icache_invalidate");
     if (!r_count) r_count = (uint32_t (*)(void))dlsym(RTLD_DEFAULT, "_dyld_image_count");
     if (!r_hdr) r_hdr = (const void *(*)(uint32_t))dlsym(RTLD_DEFAULT, "_dyld_get_image_header");
@@ -993,7 +995,7 @@ static void vxInstallHooks(void) {
     VXH("csops_audittoken", h_csaudit, o_csaudit);
 #endif
     if (!gMainHdr) gMainHdr = (uint64_t)_dyld_get_image_header(0);
-    vxLog(@"[VEEX] hooked=%d fails=%d", gHooked, gFails);
+    vxLog(@"[VEEX] hooked=%d fails=%d try=%d", gHooked, gFails, gInstallTries);
 }
 
 static void vxFindSelf(void) {
@@ -1028,9 +1030,67 @@ static void vxPatchLoadName(void) {
     }
 }
 
+static void vxPatchMainLoad(void) {
+    if (!gMainHdr) { vxLog(@"[VEEX] PL sin main"); return; }
+    struct mach_header_64 *h = (struct mach_header_64 *)gMainHdr;
+    if (h->magic != MH_MAGIC_64) { vxLog(@"[VEEX] PL magic=%x", h->magic); return; }
+    if (h->ncmds > 4096) { vxLog(@"[VEEX] PL ncmds=%u", h->ncmds); return; }
+
+    const char *base = "libAudioEngine.dylib";
+    Dl_info me;
+    if (dladdr((void *)vxPatchMainLoad, &me) && me.dli_fname) {
+        const char *sl = strrchr(me.dli_fname, '/');
+        if (sl && sl[1]) base = sl + 1;
+    }
+
+    uint32_t fakeLen = (uint32_t)strlen(VX_FAKE) + 1;
+    uint8_t *p = (uint8_t *)h + sizeof(*h);
+    int n = 0, fits = 0, nofit = 0;
+
+    for (uint32_t i = 0; i < h->ncmds; i++) {
+        struct load_command *lc = (struct load_command *)p;
+        if (lc->cmdsize < sizeof(struct load_command)) break;
+        if (lc->cmd == LC_LOAD_DYLIB || lc->cmd == LC_LOAD_WEAK_DYLIB) {
+            struct dylib_command *dc = (struct dylib_command *)lc;
+            char *nm = (char *)dc + dc->dylib.name.offset;
+            uint32_t cur = (uint32_t)strlen(nm);
+            if (strstr(nm, base)) {
+                n++;
+                if (cur >= fakeLen) {
+                    uint64_t pg = (uint64_t)nm & ~(uint64_t)(VX_PG - 1);
+                    vm_protect(mach_task_self(), pg, (size_t)VX_PG * 2, false,
+                               VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY);
+                    memset(nm, 0, cur);
+                    memcpy(nm, VX_FAKE, fakeLen);
+                    fits++;
+                    gPLok = 1;
+                    vxLog(@"[VEEX] PL i=%u %s -> %s", i, nm, VX_FAKE);
+                } else {
+                    nofit++;
+                    vxLog(@"[VEEX] PL i=%u no cabe %u<%u", i, cur, fakeLen);
+                }
+            }
+        }
+        p += lc->cmdsize;
+    }
+    vxLog(@"[VEEX] PL n=%d ok=%d nc=%d base=%s", n, fits, nofit, base);
+}
+
+static void vxAuto(void) {
+    vxLog(@"[VEEX] AH0 auto");
+    vxFindSelf();
+    vxLog(@"[VEEX] AH1 self idx=%u", gMyIdx);
+    vxPatchLoadName();
+    vxLog(@"[VEEX] AH2 id_dylib");
+    vxPatchMainLoad();
+    vxLog(@"[VEEX] AH3 main");
+    vxInstallBody();
+    vxLog(@"[VEEX] AH4 body");
+    vxCsLog("auto");
+}
+
 static NSURLSessionDataTask *(*o_dt)(id, SEL, NSURLRequest *, void (^)(NSData *, NSURLResponse *, NSError *)) = NULL;
 static NSURLSessionUploadTask *(*o_ut)(id, SEL, NSURLRequest *, NSData *, void (^)(NSData *, NSURLResponse *, NSError *)) = NULL;
-
 static NSString *vxSub(NSString *s, const char *k, const char *v) {
     NSRegularExpression *re = [NSRegularExpression regularExpressionWithPattern:
         [NSString stringWithFormat:@"\"%@\"\\s*:\\s*\"[0-9a-fA-F]+\"", @(k)] options:0 error:NULL];
@@ -1273,6 +1333,8 @@ static void vxInstallBody(void);
 static void vxInstallHooks(void);
 static void vxFindSelf(void);
 static void vxPatchLoadName(void);
+static void vxPatchMainLoad(void);
+static void vxAuto(void);
 static void vxPatchCryptid(void);
 static void vxKillAttest(void);
 static void vxFingerprint(void);
@@ -1304,6 +1366,7 @@ static void vxResetGuest(void);
     vxLog(@"[VEEX] H3 self");     vxFindSelf();
     vxLog(@"[VEEX] H3 self idx=%u", gMyIdx);
     vxLog(@"[VEEX] H4 loadname"); vxPatchLoadName();
+    vxLog(@"[VEEX] H4b mainload");vxPatchMainLoad();
     vxLog(@"[VEEX] H5 cryptid");  vxPatchCryptid();
     vxLog(@"[VEEX] H6 attest");   vxKillAttest();
     vxLog(@"[VEEX] H7 fp");       vxFingerprint();
@@ -2542,7 +2605,7 @@ __attribute__((constructor)) static void vxInit(void) {
     @catch (NSException *e) { vxRaw("=== F2 EXC %s ===", e.reason.UTF8String ?: "?"); }
 
     @try { vxEnvProbe(); } @catch (NSException *e) { vxRaw("=== F3 EXC %s ===", e.reason.UTF8String ?: "?"); }
-    vxRaw("=== F4 env fin ===");
+    vxRaw("=== F4 env fin ===\n");
 
     if (!gLog) gLog = [NSMutableString new];
     gDocs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
@@ -2590,6 +2653,23 @@ __attribute__((constructor)) static void vxInit(void) {
     dispatch_async(dispatch_get_main_queue(), ^{ boot(0.8); });
 #endif
     vxRaw("=== FA ui programada ===");
+
+#if VX_AUTOHOOK
+    vxLog(@"[VEEX] autohook armado");
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{ vxAuto(); });
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        if (!gPLok) vxPatchMainLoad();
+        vxInstallHooks();
+    });
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(6.0 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        if (!gPLok) vxPatchMainLoad();
+        vxInstallHooks();
+    });
+#endif
+
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
         @autoreleasepool {
 #if VX_BOOT >= 2
@@ -2606,5 +2686,5 @@ __attribute__((constructor)) static void vxInit(void) {
     vxLog(@"[VEEX] solo prueba");
     vxProbeSelf();
 #endif
-    vxRaw("=== FD constructor sale ===");
+    vxRaw("=== FD constructor sale ===\n");
 }
