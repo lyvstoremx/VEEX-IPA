@@ -1,25 +1,23 @@
-// VEEX shell build 152 — MODO CERO + DIAG
+// VEEX shell build 154 — MODO CERO + DESENGANCHE DE IMAGEN
 // Sin ventana, sin ganchos, sin migración, sin script.
 
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <mach-o/dyld.h>
+#import <mach-o/dyld_images.h>
 #import <mach-o/loader.h>
 #import <sys/sysctl.h>
 #import <sys/proc.h>
 #import <sys/utsname.h>
 #import <unistd.h>
-#import <CommonCrypto/CommonDigest.h>
 #include <dlfcn.h>
 #include <string.h>
 #include <stdio.h>
 #include <stdarg.h>
 
-#define VX_BUILD 152
+#define VX_BUILD 154
 
-static const char *VX_H  = "0000000000000000000000000000000000000000000000000000000000000000";
-static const char *VX_CD = "0000000000000000000000000000000000000000";
-
+extern struct dyld_all_image_infos *_dyld_get_all_image_infos(void);
 extern int csops(pid_t pid, unsigned int ops, void *useraddr, size_t usersize);
 #define VX_CS_OPS_STATUS 0
 #define VX_CS_DEBUGGED   0x10000000
@@ -65,91 +63,34 @@ static int vxSelfIndex(void) {
     return -1;
 }
 
+static void vxUnlink(void) {
+    const struct mach_header_64 *h = vxHdr();
+    struct dyld_all_image_infos *inf = _dyld_get_all_image_infos();
+    if (!h || !inf) { vxLog(@"unl sin datos"); return; }
+
+    struct dyld_image_info *arr = (struct dyld_image_info *)inf->infoArray;
+    uint32_t n = inf->infoArrayCount;
+    if (!arr || n < 2) { vxLog(@"unl arr raro n=%u", n); return; }
+
+    int idx = -1;
+    for (uint32_t i = 0; i < n; i++)
+        if (arr[i].imageLoadAddress == (const struct mach_header *)h) { idx = (int)i; break; }
+    if (idx < 0) { vxLog(@"unl no estoy"); return; }
+
+    for (uint32_t i = (uint32_t)idx; i + 1 < n; i++) arr[i] = arr[i + 1];
+    inf->infoArrayCount = n - 1;
+    inf->infoArrayChangeTimestamp = 1;
+
+    vxLog(@"unl idx=%d n=%u -> %u", idx, n, inf->infoArrayCount);
+}
+
 static void vxImgs(void) {
     uint32_t n = _dyld_image_count();
-    uint32_t lim = n < 12 ? n : 12;
+    uint32_t lim = n < 6 ? n : 6;
     for (uint32_t i = 0; i < lim; i++) {
         const char *p = _dyld_get_image_name(i);
         vxLog(@"i%u %s", i, p ? p : "?");
     }
-}
-
-static void vxCsDiag(const struct mach_header_64 *h) {
-    if (!h) { vxLog(@"cs hdr=0"); return; }
-    const struct load_command *lc = (const void *)(h + 1);
-    for (uint32_t i = 0; i < h->ncmds; i++) {
-        if (lc->cmd == LC_CODE_SIGNATURE) {
-            const struct linkedit_data_command *cs = (const void *)lc;
-            vxLog(@"cs lc=1 off=%u size=%u", cs->dataoff, cs->datasize);
-            if (cs->datasize >= 12) {
-                const uint8_t *b = (const uint8_t *)h + cs->dataoff;
-                vxLog(@"cs magic=%08x len=%u cnt=%u",
-                      *(const uint32_t *)b,
-                      *(const uint32_t *)(b + 4),
-                      *(const uint32_t *)(b + 8));
-            }
-            return;
-        }
-        lc = (const void *)((const char *)lc + lc->cmdsize);
-    }
-    vxLog(@"cs lc=0");
-}
-
-static int vxTextRange(const struct mach_header_64 *h, uintptr_t *addr, size_t *len) {
-    if (!h) return 0;
-    const struct load_command *lc = (const void *)(h + 1);
-    for (uint32_t i = 0; i < h->ncmds; i++) {
-        if (lc->cmd == LC_SEGMENT_64) {
-            const struct segment_command_64 *sg = (const void *)lc;
-            if (!strcmp(sg->segname, "__TEXT")) {
-                *addr = (uintptr_t)h + (uintptr_t)sg->vmaddr;
-                *len  = (size_t)(sg->filesize < sg->vmsize ? sg->filesize : sg->vmsize);
-                return *len > 0;
-            }
-        }
-        lc = (const void *)((const char *)lc + lc->cmdsize);
-    }
-    return 0;
-}
-
-static NSString *vxSHA256(uintptr_t a, size_t n) {
-    unsigned char d[CC_SHA256_DIGEST_LENGTH];
-    CC_SHA256((const void *)a, (CC_LONG)n, d);
-    NSMutableString *s = [NSMutableString stringWithCapacity:64];
-    for (int i = 0; i < CC_SHA256_DIGEST_LENGTH; i++) [s appendFormat:@"%02x", d[i]];
-    return s;
-}
-
-struct vxBlobIndex { uint32_t type; uint32_t offset; };
-struct vxSuperBlob { uint32_t magic; uint32_t length; uint32_t count; };
-
-static NSString *vxCDHash(const struct mach_header_64 *h) {
-    if (!h) return nil;
-    const struct load_command *lc = (const void *)(h + 1);
-    for (uint32_t i = 0; i < h->ncmds; i++) {
-        if (lc->cmd == LC_CODE_SIGNATURE) {
-            const struct linkedit_data_command *cs = (const void *)lc;
-            if (!cs->datasize) return nil;
-            const uint8_t *base = (const uint8_t *)h + cs->dataoff;
-            const struct vxSuperBlob *sb = (const void *)base;
-            if (sb->magic != 0xfade0cc0 || sb->count > 8) return nil;
-            for (uint32_t k = 0; k < sb->count; k++) {
-                const struct vxBlobIndex *bi = (const void *)((const uint8_t *)(sb + 1) + k * sizeof(struct vxBlobIndex));
-                if (bi->type != 0) continue;
-                const uint8_t *cd = base + bi->offset;
-                uint32_t clen = *(const uint32_t *)(cd + 4);
-                if (clen < 0x2c || clen > cs->datasize) return nil;
-                unsigned char d[CC_SHA1_DIGEST_LENGTH];
-                CC_SHA1(cd, (CC_LONG)clen, d);
-                NSMutableString *s = [NSMutableString stringWithCapacity:40];
-                for (int j = 0; j < CC_SHA1_DIGEST_LENGTH; j++) [s appendFormat:@"%02x", d[j]];
-                return s;
-            }
-            return nil;
-        }
-        lc = (const void *)((const char *)lc + lc->cmdsize);
-    }
-    return nil;
 }
 
 static void vxFlags(void) {
@@ -173,29 +114,16 @@ static void vxRun(void) {
     struct utsname u; memset(&u, 0, sizeof(u)); uname(&u);
     Dl_info di; memset(&di, 0, sizeof(di)); dladdr((void *)&vxHdr, &di);
 
-    vxLog(@"==== arranque modo cero diag ====");
+    vxLog(@"==== arranque desenganche ====");
     vxLog(@"ios=%@ hw=%s", UIDevice.currentDevice.systemVersion, u.machine);
-    vxLog(@"imgs=%u self=%d", _dyld_image_count(), vxSelfIndex());
     vxLog(@"path=%s", di.dli_fname ? di.dli_fname : "?");
     vxFlags();
     vxImgs();
 
-    const struct mach_header_64 *h = vxHdr();
-    vxCsDiag(h);
-
-    NSString *bh = [NSString stringWithUTF8String:VX_H];
-    NSString *bc = [NSString stringWithUTF8String:VX_CD];
-
-    uintptr_t ta = 0; size_t tl = 0;
-    if (h && vxTextRange(h, &ta, &tl)) {
-        vxLog(@"txt=0x%lx len=%zu", (unsigned long)ta, tl);
-        NSString *mh = vxSHA256(ta, tl);
-        NSString *mc = vxCDHash(h);
-        vxLog(@"HS h %@ %@", mh ?: @"-", [mh isEqualToString:bh] ? @"SI" : @"NO");
-        vxLog(@"HS cd %@ %@", mc ?: @"-", [mc isEqualToString:bc] ? @"SI" : @"NO");
-    } else {
-        vxLog(@"txt=err");
-    }
+    vxLog(@"antes=%u self=%d", _dyld_image_count(), vxSelfIndex());
+    vxUnlink();
+    vxLog(@"despues=%u self=%d", _dyld_image_count(), vxSelfIndex());
+    vxImgs();
 
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 5ull * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
         vxLog(@"vivo 5s");
