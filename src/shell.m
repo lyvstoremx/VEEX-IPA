@@ -1,4 +1,4 @@
-// src/shell.m — VEEX build 148
+// src/shell.m — VEEX build 149
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
@@ -31,7 +31,7 @@
 
 extern kern_return_t vm_region_64(vm_map_t, vm_address_t *, vm_size_t *, vm_region_flavor_t, vm_region_info_t, mach_msg_type_number_t *, mach_port_t *);
 
-#define VX_BUILD 148
+#define VX_BUILD 149
 #define VX_BOOT 3
 #define VX_HOOKSET 5
 #define VX_AUTOHOOK 1
@@ -809,13 +809,15 @@ static void vxPatchMainLoad(void) {
                 continue;
             }
             if (cur + 1 >= fakeLen) {
+                char repl[64];
+                memset(repl, 0, sizeof repl);
+                memcpy(repl, VX_FAKE, fakeLen);
                 uint64_t pg = (uint64_t)nm & ~(uint64_t)(VX_PG - 1);
                 vm_protect(mach_task_self(), pg, (size_t)VX_PG * 2, false,
                            VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY);
                 char tmp[256];
                 snprintf(tmp, sizeof tmp, "%s", nm);
-                memset(nm, 0, cur + 1);
-                memcpy(nm, VX_FAKE, fakeLen);
+                memcpy(nm, repl, fakeLen);
                 fits++; gPLok = 1;
                 vxLog(@"[VEEX] PL i=%u %s -> %s", i, tmp, VX_FAKE);
             } else {
@@ -1857,13 +1859,15 @@ __attribute__((constructor)) static void vxInit(void) {
         if (p && sz) { gTextLo = (uint64_t)p; gTextHi = (uint64_t)p + sz; gTextSz = sz; }
     }
 #if VX_AUTOHOOK
-    vxLog(@"[VEEX] camuflaje temprano");
-    vxFindSelf();
-    vxPatchLoadName();
-    vxPatchMainLoad();
-    vxInstallBody();
-    vxLog(@"[VEEX] AH temprano fin idx=%u ok=%d", gMyIdx, gPLok);
+    dispatch_async(dispatch_get_main_queue(), ^{
+        vxLog(@"[VEEX] camuflaje temprano");
+        vxFindSelf();
+        vxPatchLoadName();
+        vxPatchMainLoad();
+        vxLog(@"[VEEX] AH temprano fin idx=%u ok=%d", gMyIdx, gPLok);
+    });
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        vxInstallBody();
         if (!gPLok) vxPatchMainLoad();
         vxInstallHooks();
     });
