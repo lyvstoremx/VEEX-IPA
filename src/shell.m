@@ -1,4 +1,4 @@
-// src/shell.m — VEEX build 149
+// src/shell.m — VEEX build 150
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
@@ -28,16 +28,15 @@
 #include "lua.h"
 #include "lauxlib.h"
 #include "lualib.h"
-
 extern kern_return_t vm_region_64(vm_map_t, vm_address_t *, vm_size_t *, vm_region_flavor_t, vm_region_info_t, mach_msg_type_number_t *, mach_port_t *);
-
-#define VX_BUILD 149
+extern kern_return_t mach_vm_region(vm_map_t, uint64_t *, uint64_t *, vm_region_flavor_t, vm_region_info_t, mach_msg_type_number_t *, mach_port_t *);
+#define VX_BUILD 150
 #define VX_BOOT 3
 #define VX_HOOKSET 5
 #define VX_AUTOHOOK 1
+#define VX_HIDEREG 1
 #define VX_FPS 20
 #define SCRIPT_URL @"https://raw.githubusercontent.com/lyvstoremx/VEEX-IPA/main/scripts/esp.lua"
-
 extern int csops(pid_t, unsigned int, void *, size_t);
 extern int csops_audittoken(pid_t, unsigned int, void *, size_t, uint32_t *);
 #define VX_CS_OPS_STATUS 0
@@ -48,14 +47,12 @@ extern int csops_audittoken(pid_t, unsigned int, void *, size_t, uint32_t *);
 #define VX_PFLAG_OFF 32
 #define VX_P_TRACED 0x800
 #define VX_PG 0x4000
-
 static const char *VX_H = "00770007d45fe15664db57df30274f5c49daaa04f276be030f20686e673c833b";
 static const char *VX_CD = "d9cf9ae60f2433bf47fe33a29d7122bb1bcc5965";
 static const char *VX_MD5ID = "75ead73659249cdb3a0eee33e86c003a";
 static const char *VX_TEAM = "98573T3W6L";
 static const char *VX_APPID = "98573T3W6L.com.dts.freefireth";
 static const char *VX_FAKE = "/usr/lib/libobjc.A.dylib";
-
 static NSMutableString *gLog = nil;
 static NSString *gDocs = nil;
 static UIWindow *gWin = nil;
@@ -71,6 +68,7 @@ static lua_State *gL = NULL;
 static volatile int gRun = 0;
 static uint64_t gBase = 0, gSize = 0, gMainHdr = 0;
 static uint32_t gMyIdx = 0xFFFFFFFFu;
+static uint64_t gSelfLo = 0, gSelfHi = 0;
 static double gLastPb = 0;
 static uint64_t gTextLo = 0, gTextHi = 0, gTextSz = 0;
 static volatile int gHitMd5 = 0, gHitSha1 = 0, gHitSha256 = 0, gForced = 0;
@@ -89,8 +87,9 @@ static volatile uint64_t gB0A, gB0B, gB1A, gB1B, gB2A, gB2B, gB3A, gB3B;
 static volatile uint64_t *gBInstr[4];
 static volatile uint64_t *gBAddr[4];
 static volatile int gBHN = 0;
-
 static void vxFindSelf(void);
+static void vxSelfRange(void);
+static void vxHashSelf(void);
 static void vxPatchLoadName(void);
 static void vxPatchMainLoad(void);
 static void vxInstallBody(void);
@@ -120,7 +119,14 @@ static void vxFlush(void *p, size_t n);
 static void vxFlushPair(void *w, void *x, size_t n);
 static void vxHookSym(const char *name, void *rep, void **origOut);
 static void vxRegister(lua_State *L);
-
+static NSString *vxStore(const char *n) {
+    static NSString *dir = nil;
+    if (!dir) {
+        NSString *c = NSSearchPathForDirectoriesInDomains(NSCachesDirectory, NSUserDomainMask, YES).firstObject;
+        dir = c ? [c copy] : [gDocs copy];
+    }
+    return [dir stringByAppendingPathComponent:@(n)];
+}
 static void vxRaw(const char *fmt, ...) {
     FILE *f = fopen("/tmp/vx.log", "a");
     if (!f) return;
@@ -128,16 +134,14 @@ static void vxRaw(const char *fmt, ...) {
     fputc('\n', f); fflush(f); fclose(f);
 }
 static int vxInText(const void *p) { uint64_t a = (uint64_t)p; return (gTextLo && a >= gTextLo && a < gTextHi) ? 1 : 0; }
-
 static void vxWriteSync(NSString *s) {
     if (!gDocs) return;
-    NSString *p = [gDocs stringByAppendingPathComponent:@"veex.log"];
+    NSString *p = vxStore("b.dat");
     NSFileHandle *f = [NSFileHandle fileHandleForWritingAtPath:p];
     if (!f) { [s writeToFile:p atomically:YES encoding:NSUTF8StringEncoding error:nil]; return; }
     [f seekToEndOfFile]; [f writeData:[s dataUsingEncoding:NSUTF8StringEncoding]];
     [f synchronizeFile]; [f closeFile];
 }
-
 static void vxKeep(NSString *s) {
     if (!gDocs) return;
     static const char *tags[] = {
@@ -145,21 +149,21 @@ static void vxKeep(NSString *s) {
         "[VEEX] tramp", "[VEEX] gcx", "[VEEX] xprot", "[VEEX] h1 ", "[VEEX] pm ", "[VEEX] slotx",
         "[VEEX] mp=", "[VEEX] patched", "[VEEX] revertido", "[VEEX] anonx", "[VEEX] sin tramp",
         "[VEEX] hooked", "[VEEX] w ", "[VEEX] wr", "[VEEX] xf", "[VEEX] xp=", "[VEEX] bh",
-        "[VEEX] scr=", "[VEEX] AH", "[VEEX] PL", "[VEEX] b", "[VEEX] autohook", "[VEEX] camuflaje",
-        "[L] n=", "[L] m=", "[L] k=", "[L] cam=", "[L] f=", "[L] self=", "[L] stale", "[L] cam muerta"
+        "[VEEX] scr=", "[VEEX] AH", "[VEEX] PL", "[VEEX] b", "[VEEX] camuflaje", "[VEEX] HS",
+        "[VEEX] VR", "[L] n=", "[L] m=", "[L] k=", "[L] cam=", "[L] f=", "[L] self=",
+        "[L] stale", "[L] cam muerta"
     };
     const char *c = s.UTF8String;
     int hit = 0;
     for (unsigned i = 0; i < sizeof(tags) / sizeof(tags[0]); i++)
         if (!strncmp(c, tags[i], strlen(tags[i]))) { hit = 1; break; }
     if (!hit) return;
-    NSString *p = [gDocs stringByAppendingPathComponent:@"veex.last"];
+    NSString *p = vxStore("c.dat");
     NSFileHandle *f = [NSFileHandle fileHandleForWritingAtPath:p];
     if (!f) { [s writeToFile:p atomically:YES encoding:NSUTF8StringEncoding error:NULL]; return; }
     [f seekToEndOfFile]; [f writeData:[s dataUsingEncoding:NSUTF8StringEncoding]];
     [f synchronizeFile]; [f closeFile];
 }
-
 static void vxLog(NSString *fmt, ...) {
     va_list ap; va_start(ap, fmt);
     NSString *s = [[NSString alloc] initWithFormat:fmt arguments:ap];
@@ -186,12 +190,13 @@ static void vxLog(NSString *fmt, ...) {
 static void vxHex(const char *hex, unsigned char *out, int len) {
     for (int i = 0; i < len; i++) { unsigned v = 0; sscanf(hex + i * 2, "%2x", &v); out[i] = (unsigned char)v; }
 }
-
+static void vxToHex(const unsigned char *in, int len, char *out) {
+    for (int i = 0; i < len; i++) sprintf(out + i * 2, "%02x", in[i]);
+    out[len * 2] = 0;
+}
 __attribute__((used, section("__TEXT,__vxcave"))) static const uint8_t gCavePad[8192] = {0};
 #define VX_SLOT 128
-
 static void vxEmitAbs(uint32_t *w, uint64_t v) { w[0] = 0x58000050; w[1] = 0xD61F0200; memcpy(w + 2, &v, 8); }
-
 static int vxEmitMovAbs(uint32_t *w, uint32_t rd, uint64_t v) {
     w[0] = 0xD2800000u | (uint32_t)((v & 0xFFFF) << 5) | rd;
     w[1] = 0xF2800000u | (1u << 21) | (uint32_t)(((v >> 16) & 0xFFFF) << 5) | rd;
@@ -246,7 +251,6 @@ static int vxProtOf(void *p) {
     if (vm_region_64(mach_task_self(), &a, &sz, VM_REGION_BASIC_INFO_64, (vm_region_info_t)&info, &cnt, &obj) != KERN_SUCCESS) return -1;
     return (int)info.protection;
 }
-
 static int vxMapTry(const char *path, uint64_t off, int shared, int initw, int how, uint8_t **outCave, void **outBase, size_t *outLen) {
     uint64_t pa = off & ~(uint64_t)(VX_PG - 1);
     size_t delta = (size_t)(off - pa), len = (size_t)VX_PG * 2;
@@ -573,7 +577,6 @@ static void vxHookName(const char *name, void *rep, void **origOut) {
 static uint32_t (*r_count)(void) = NULL;
 static const void *(*r_hdr)(uint32_t) = NULL;
 static intptr_t (*r_slide)(uint32_t) = NULL;
-
 static void vxHookSym(const char *name, void *rep, void **origOut) {
     void *keep = *origOut;
     *origOut = NULL;
@@ -626,7 +629,6 @@ static void vxHookSym(const char *name, void *rep, void **origOut) {
     if (!*origOut) *origOut = keep;
     if (hits) gHooked++;
 }
-
 static unsigned char *(*o_md5)(const void *, CC_LONG, unsigned char *) = NULL;
 static unsigned char *(*o_sha1)(const void *, CC_LONG, unsigned char *) = NULL;
 static unsigned char *(*o_sha256)(const void *, CC_LONG, unsigned char *) = NULL;
@@ -672,6 +674,28 @@ static const void *h_dyld_get_image_header(uint32_t i) {
     if (gMyIdx != 0xFFFFFFFFu && i >= gMyIdx) i++;
     return o_dyld_get_image_header ? o_dyld_get_image_header(i) : NULL;
 }
+static kern_return_t (*o_vr64)(vm_map_t, vm_address_t *, vm_size_t *, vm_region_flavor_t, vm_region_info_t, mach_msg_type_number_t *, mach_port_t *) = NULL;
+static kern_return_t (*o_mvr)(vm_map_t, uint64_t *, uint64_t *, vm_region_flavor_t, vm_region_info_t, mach_msg_type_number_t *, mach_port_t *) = NULL;
+static kern_return_t h_vr64(vm_map_t t, vm_address_t *a, vm_size_t *s, vm_region_flavor_t f, vm_region_info_t inf, mach_msg_type_number_t *c, mach_port_t *ob) {
+    kern_return_t r = o_vr64(t, a, s, f, inf, c, ob);
+    for (int k = 0; r == KERN_SUCCESS && gSelfHi && k < 6; k++) {
+        uint64_t lo = *a, hi = lo + *s;
+        if (hi <= gSelfLo || lo >= gSelfHi) break;
+        *a = (vm_address_t)(hi > gSelfHi ? hi : gSelfHi);
+        r = o_vr64(t, a, s, f, inf, c, ob);
+    }
+    return r;
+}
+static kern_return_t h_mvr(vm_map_t t, uint64_t *a, uint64_t *s, vm_region_flavor_t f, vm_region_info_t inf, mach_msg_type_number_t *c, mach_port_t *ob) {
+    kern_return_t r = o_mvr(t, a, s, f, inf, c, ob);
+    for (int k = 0; r == KERN_SUCCESS && gSelfHi && k < 6; k++) {
+        uint64_t lo = *a, hi = lo + *s;
+        if (hi <= gSelfLo || lo >= gSelfHi) break;
+        *a = (hi > gSelfHi ? hi : gSelfHi);
+        r = o_mvr(t, a, s, f, inf, c, ob);
+    }
+    return r;
+}
 static int (*o_csops)(pid_t, unsigned int, void *, size_t) = NULL;
 static int h_csops(pid_t p, unsigned int op, void *u, size_t s) {
     int r = o_csops ? o_csops(p, op, u, s) : -1;
@@ -713,9 +737,7 @@ static int h_sysctlbyname(const char *nm, void *o, size_t *ol, void *nw, size_t 
     }
     return r;
 }
-
 #define VXH(nm, fn, orig) do { vxHookSym(nm, (void *)(fn), (void **)&orig); if (!orig) { gFails++; vxLog(@"[VEEX] miss %@", @(nm)); } } while (0)
-
 static void vxCsLog(const char *tag) {
     uint32_t st = 0;
     int r = csops(getpid(), VX_CS_OPS_STATUS, &st, sizeof st);
@@ -747,6 +769,11 @@ static void vxInstallHooks(void) {
     VXH("csops", h_csops, o_csops);
     VXH("csops_audittoken", h_csaudit, o_csaudit);
 #endif
+#if VX_HIDEREG
+    VXH("vm_region_64", h_vr64, o_vr64);
+    VXH("vm_region", h_vr64, o_vr64);
+    VXH("mach_vm_region", h_mvr, o_mvr);
+#endif
     if (!gMainHdr) gMainHdr = (uint64_t)_dyld_get_image_header(0);
     vxLog(@"[VEEX] hooked=%d fails=%d try=%d", gHooked, gFails, gInstallTries);
 }
@@ -756,6 +783,35 @@ static void vxFindSelf(void) {
     uint32_t n = _dyld_image_count();
     for (uint32_t i = 0; i < n; i++)
         if (_dyld_get_image_header(i) == di.dli_fbase) { gMyIdx = i; return; }
+}
+static void vxSelfRange(void) {
+    if (!gMyIdx || gMyIdx == 0xFFFFFFFFu) return;
+    const struct mach_header_64 *h = (const struct mach_header_64 *)_dyld_get_image_header(gMyIdx);
+    if (!h) return;
+    const struct load_command *lc = (const struct load_command *)(h + 1);
+    uint64_t tv = 0, lo = 0, hi = 0;
+    for (uint32_t i = 0; i < h->ncmds; i++) {
+        if (lc->cmd == LC_SEGMENT_64) {
+            const struct segment_command_64 *sg = (const struct segment_command_64 *)lc;
+            if (!strcmp(sg->segname, "__TEXT")) tv = sg->vmaddr;
+        }
+        lc = (const struct load_command *)((uint8_t *)lc + lc->cmdsize);
+    }
+    uint64_t slide = (uint64_t)h - tv;
+    lc = (const struct load_command *)(h + 1);
+    for (uint32_t i = 0; i < h->ncmds; i++) {
+        if (lc->cmd == LC_SEGMENT_64) {
+            const struct segment_command_64 *sg = (const struct segment_command_64 *)lc;
+            if (sg->vmsize) {
+                uint64_t s = slide + sg->vmaddr;
+                if (!lo || s < lo) lo = s;
+                if (s + sg->vmsize > hi) hi = s + sg->vmsize;
+            }
+        }
+        lc = (const struct load_command *)((uint8_t *)lc + lc->cmdsize);
+    }
+    gSelfLo = lo; gSelfHi = hi;
+    vxLog(@"[VEEX] VR rango %llx-%llx", lo, hi);
 }
 static void vxPatchLoadName(void) {
     if (!gMyIdx || gMyIdx == 0xFFFFFFFFu) return;
@@ -829,9 +885,72 @@ static void vxPatchMainLoad(void) {
     }
     vxLog(@"[VEEX] PL n=%d ok=%d ya=%d nc=%d base=%s", n, fits, ya, nofit, base);
 }
+static void vxHashSelf(void) {
+    if (!gMainHdr) { vxLog(@"[VEEX] HS sin main"); return; }
+    struct mach_header_64 *h = (struct mach_header_64 *)gMainHdr;
+    struct load_command *lc = (struct load_command *)(h + 1);
+    uint64_t off = 0, sz = 0;
+    uint32_t sigOff = 0, sigSz = 0;
+    for (uint32_t i = 0; i < h->ncmds; i++) {
+        if (lc->cmd == LC_SEGMENT_64) {
+            struct segment_command_64 *sg = (struct segment_command_64 *)lc;
+            if (!strcmp(sg->segname, "__TEXT")) { off = sg->fileoff; sz = sg->filesize; }
+        } else if (lc->cmd == LC_CODE_SIGNATURE) {
+            struct linkedit_data_command *ld = (struct linkedit_data_command *)lc;
+            sigOff = ld->dataoff; sigSz = ld->datasize;
+        }
+        lc = (struct load_command *)((uint8_t *)lc + lc->cmdsize);
+    }
+    if (!sz) { vxLog(@"[VEEX] HS sin text"); return; }
+    NSString *exe = [[NSBundle mainBundle] executablePath];
+    int fd = open(exe.UTF8String, O_RDONLY);
+    if (fd < 0) { vxLog(@"[VEEX] HS open=%d", errno); return; }
+    CC_SHA256_CTX c256;
+    CC_SHA256_Init(&c256);
+    uint8_t *buf = malloc(262144);
+    uint64_t done = 0;
+    while (buf && done < sz) {
+        size_t want = (size_t)((sz - done) > 262144 ? 262144 : (sz - done));
+        ssize_t r = read(fd, buf, want);
+        if (r <= 0) break;
+        CC_SHA256_Update(&c256, buf, (CC_LONG)r);
+        done += (uint64_t)r;
+    }
+    unsigned char md[32];
+    CC_SHA256_Final(md, &c256);
+    char hx[80];
+    vxToHex(md, 32, hx);
+    vxLog(@"[VEEX] HS h=%s esp=%s %s", hx, VX_H, strcmp(hx, VX_H) ? "NO" : "SI");
+    if (sigOff && sigSz && sigSz < 262144) {
+        uint8_t *sb = malloc(sigSz);
+        if (sb && pread(fd, sb, sigSz, (off_t)sigOff) == (ssize_t)sigSz) {
+            uint32_t magic = *(uint32_t *)sb;
+            if (magic == 0xfade0cc0 && sigSz >= 12) {
+                uint32_t cnt = *(uint32_t *)(sb + 8);
+                uint32_t boff = 0, blen = 0;
+                for (uint32_t k = 0; k < cnt && 12 + (k + 1) * 8 <= sigSz; k++) {
+                    uint32_t ty = *(uint32_t *)(sb + 12 + k * 8);
+                    uint32_t of = *(uint32_t *)(sb + 16 + k * 8);
+                    if (ty == 0 && of + 8 <= sigSz) { boff = of; blen = *(uint32_t *)(sb + of + 4); break; }
+                }
+                if (boff && blen && boff + blen <= sigSz && *(uint32_t *)(sb + boff) == 0xfade0c02) {
+                    unsigned char cd[20];
+                    CC_SHA1(sb + boff, blen, cd);
+                    char cx[60];
+                    vxToHex(cd, 20, cx);
+                    vxLog(@"[VEEX] HS cd=%s esp=%s %s", cx, VX_CD, strcmp(cx, VX_CD) ? "NO" : "SI");
+                } else vxLog(@"[VEEX] HS cd sin blob");
+            } else vxLog(@"[VEEX] HS sb magic=%x", magic);
+        }
+        free(sb);
+    }
+    free(buf);
+    close(fd);
+}
 static void vxAuto(void) {
     vxLog(@"[VEEX] AH0 auto");
     vxFindSelf();
+    vxSelfRange();
     vxLog(@"[VEEX] AH1 self idx=%u", gMyIdx);
     vxPatchLoadName();
     vxLog(@"[VEEX] AH2 id_dylib");
@@ -840,8 +959,8 @@ static void vxAuto(void) {
     vxInstallBody();
     vxLog(@"[VEEX] AH4 body");
     vxCsLog("auto");
+    vxHashSelf();
 }
-
 static NSString *vxSub(NSString *s, const char *k, const char *v) {
     NSRegularExpression *re = [NSRegularExpression regularExpressionWithPattern:
         [NSString stringWithFormat:@"\"%@\"\\s*:\\s*\"[0-9a-fA-F]+\"", @(k)] options:0 error:NULL];
@@ -946,7 +1065,6 @@ static void vxPatchCryptid(void) {
         p += lc->cmdsize;
     }
 }
-
 typedef void *(*f_v)(void);
 typedef void *(*f_asms)(void *, size_t *);
 typedef void *(*f_p1)(void *);
@@ -969,7 +1087,6 @@ static char gUnityPath[1024];
 static void *gUniHandle = NULL;
 static void *(*p_gchn)(void *, int) = NULL;
 static void (*p_gchf)(uint32_t) = NULL;
-
 static void vxFindUnityPath(void) {
     if (gUnityPath[0]) return;
     uint32_t n = _dyld_image_count();
@@ -1014,7 +1131,6 @@ static void vxLoadIL2CPP(void) {
     gI2C = p_dom && p_asms && p_img && p_cc && p_ci && p_cn && p_kl && finder;
     vxLog(@"[VEEX] il2cpp %d/15 ok=%d", got, gI2C);
 }
-
 typedef struct { int t; float x, y, w, h; float r, g, b, a; char s[72]; } vxCmd;
 #define VX_CMAX 512
 static vxCmd gCmd[VX_CMAX];
@@ -1022,7 +1138,6 @@ static volatile int gCmdN = 0;
 static volatile int gDrawLock = 0;
 static void vxLock(void) { while (__atomic_test_and_set((volatile void *)&gDrawLock, __ATOMIC_ACQUIRE)) {} }
 static void vxUnlock(void) { __atomic_clear((volatile void *)&gDrawLock, __ATOMIC_RELEASE); }
-
 @interface VXCanvas : UIView @end
 @implementation VXCanvas
 - (instancetype)initWithFrame:(CGRect)f {
@@ -1051,7 +1166,6 @@ static void vxUnlock(void) { __atomic_clear((volatile void *)&gDrawLock, __ATOMI
     vxUnlock();
 }
 @end
-
 @interface VXRoot : UIView
 - (void)vxDoClose;
 - (void)vxDoTab:(UIButton *)b;
@@ -1073,6 +1187,7 @@ static void vxUnlock(void) { __atomic_clear((volatile void *)&gDrawLock, __ATOMI
     vxInstallBody();
     vxInstallHooks();
     vxFindSelf();
+    vxSelfRange();
     vxLog(@"[VEEX] H3 self idx=%u", gMyIdx);
     vxPatchLoadName();
     vxPatchMainLoad();
@@ -1080,6 +1195,7 @@ static void vxUnlock(void) { __atomic_clear((volatile void *)&gDrawLock, __ATOMI
     vxKillAttest();
     vxFingerprint();
     vxCsLog("post");
+    vxHashSelf();
     vxLog(@"[VEEX] H8 fin");
 }
 - (void)vxDoRun { vxRunScript(); }
@@ -1087,7 +1203,6 @@ static void vxUnlock(void) { __atomic_clear((volatile void *)&gDrawLock, __ATOMI
 - (void)vxDoCopy { UIPasteboard.generalPasteboard.string = gLog ?: @""; vxLog(@"[VEEX] log copiado"); }
 - (void)vxDoRst { vxLog(@"[VEEX] RST tap"); vxResetGuest(); }
 @end
-
 @interface VXWindow : UIWindow @end
 @implementation VXWindow
 - (UIView *)hitTest:(CGPoint)p withEvent:(UIEvent *)e {
@@ -1096,7 +1211,6 @@ static void vxUnlock(void) { __atomic_clear((volatile void *)&gDrawLock, __ATOMI
     return v;
 }
 @end
-
 @interface VXRow : UIButton
 - (void)vxPaint;
 - (void)vxTap;
@@ -1113,7 +1227,6 @@ static void vxUnlock(void) { __atomic_clear((volatile void *)&gDrawLock, __ATOMI
     [self setTitleColor:on ? UIColor.whiteColor : [UIColor colorWithWhite:0.1 alpha:1] forState:UIControlStateNormal];
 }
 @end
-
 static int l_clear(lua_State *L) { (void)L; vxLock(); gCmdN = 0; vxUnlock(); return 0; }
 static int l_rect(lua_State *L) {
     vxLock();
@@ -1368,7 +1481,6 @@ static int l_matdump(lua_State *L) {
     return 0;
 }
 static void vxStopScript(void) { gRun = 0; }
-
 static void vxWipe(void) {
     vxLog(@"[VEEX] WIPE inicio");
     NSString *bid = [[NSBundle mainBundle] bundleIdentifier];
@@ -1407,12 +1519,11 @@ static void vxWipe(void) {
 }
 static void vxResetGuest(void) {
     vxLog(@"[VEEX] RESET armado");
-    NSString *flag = [gDocs stringByAppendingPathComponent:@"veex.reset"];
+    NSString *flag = vxStore("e.dat");
     [@"1" writeToFile:flag atomically:YES encoding:NSUTF8StringEncoding error:NULL];
     [[NSUserDefaults standardUserDefaults] synchronize];
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ exit(0); });
 }
-
 typedef void *(*f_flds)(void *, void **);
 typedef const char *(*f_fname)(void *);
 typedef size_t (*f_foff)(void *);
@@ -1609,7 +1720,7 @@ static void *vxRunThread(void *arg) {
     for (int i = 0; i < 40; i++) { dom = p_dom(); if (dom) break; [NSThread sleepForTimeInterval:0.2]; }
     if (!dom) { vxLog(@"[VEEX] R6 ABORTO dom"); return NULL; }
     p_att(dom);
-    NSString *path = [gDocs stringByAppendingPathComponent:@"esp.lua"];
+    NSString *path = vxStore("a.dat");
     NSMutableURLRequest *rq = [NSMutableURLRequest requestWithURL:
         [NSURL URLWithString:[SCRIPT_URL stringByAppendingFormat:@"?t=%d", (int)time(NULL)]]];
     [rq setCachePolicy:NSURLRequestReloadIgnoringLocalAndRemoteCacheData];
@@ -1620,7 +1731,7 @@ static void *vxRunThread(void *arg) {
     if (d.length > 100) [d writeToFile:path atomically:YES];
     else vxLog(@"[VEEX] sin red, copia local");
     if (d.length > 20) vxLog(@"[VEEX] scr=%@", [[NSString alloc] initWithData:[d subdataWithRange:NSMakeRange(0, 20)] encoding:NSUTF8StringEncoding] ?: @"?");
-    if (![[NSFileManager defaultManager] fileExistsAtPath:path]) { vxLog(@"[VEEX] RD falta esp.lua"); return NULL; }
+    if (![[NSFileManager defaultManager] fileExistsAtPath:path]) { vxLog(@"[VEEX] RD falta script"); return NULL; }
     gL = luaL_newstate();
     if (!gL) { vxLog(@"[VEEX] RE sin estado"); return NULL; }
     luaL_openlibs(gL);
@@ -1708,7 +1819,6 @@ static void buildUI(UIWindowScene *sc) {
     gCfg[@"aim.silent"] = @NO; gCfg[@"aim.awm"] = @NO;
     gCfg[@"draw.line"] = @NO; gCfg[@"draw.hp"] = @NO; gCfg[@"draw.wpn"] = @NO; gCfg[@"draw.skel"] = @NO;
     gCfg[@"misc.fps"] = @NO; gCfg[@"misc.anti"] = @NO;
-
     gWin = [[VXWindow alloc] initWithWindowScene:sc];
     gWin.frame = sc.coordinateSpace.bounds;
     gWin.windowLevel = UIWindowLevelAlert + 1;
@@ -1721,7 +1831,6 @@ static void buildUI(UIWindowScene *sc) {
     gWin.hidden = NO;
     gDraw = [[VXCanvas alloc] initWithFrame:gWin.bounds];
     [gRoot addSubview:gDraw];
-
     CGFloat W = gWin.bounds.size.width;
     CGFloat ph = MIN(468, gWin.bounds.size.height - 90);
     gPanel = [[UIView alloc] initWithFrame:CGRectMake(W - 250, 44, 238, ph)];
@@ -1730,7 +1839,6 @@ static void buildUI(UIWindowScene *sc) {
     gPanel.backgroundColor = [UIColor colorWithWhite:1 alpha:0.92];
     gPanel.hidden = YES;
     [gRoot addSubview:gPanel];
-
     UIView *head = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 238, 36)];
     head.backgroundColor = [UIColor colorWithWhite:0.11 alpha:1];
     [gPanel addSubview:head];
@@ -1756,7 +1864,6 @@ static void buildUI(UIWindowScene *sc) {
     [cl setTitle:@"X" forState:UIControlStateNormal];
     [cl addTarget:gRoot action:@selector(vxDoClose) forControlEvents:UIControlEventTouchUpInside];
     [head addSubview:cl];
-
     NSArray *names = @[@"ESP", @"AIM", @"DRAW", @"MISC", @"SET", @"DBG"];
     NSMutableArray *btns = [NSMutableArray array];
     for (int i = 0; i < (int)names.count; i++) {
@@ -1781,7 +1888,6 @@ static void buildUI(UIWindowScene *sc) {
     gLogView.font = [UIFont monospacedSystemFontOfSize:9 weight:UIFontWeightRegular];
     gLogView.textColor = [UIColor colorWithWhite:0.15 alpha:1];
     [gPanel addSubview:gLogView];
-
     UIButton *run = [UIButton buttonWithType:UIButtonTypeSystem];
     run.frame = CGRectMake(8, ph - 42, 70, 30);
     [run setTitle:@"RUN" forState:UIControlStateNormal];
@@ -1825,6 +1931,14 @@ static void boot(double delay) {
         boot(1.0);
     });
 }
+static void vxLegacy(void) {
+    for (int i = 0; i < 5; i++) {
+        static const char *n[] = { "esp.lua", "veex.log", "veex.last", "veex.boot", "veex.reset" };
+        NSString *p = [gDocs stringByAppendingPathComponent:@(n[i])];
+        if ([[NSFileManager defaultManager] fileExistsAtPath:p])
+            [[NSFileManager defaultManager] removeItemAtPath:p error:NULL];
+    }
+}
 __attribute__((constructor)) static void vxInit(void) {
     vxRaw("=== build %d: constructor ===", VX_BUILD);
     gBInstr[0] = &gB0A; gBInstr[1] = &gB1A; gBInstr[2] = &gB2A; gBInstr[3] = &gB3A;
@@ -1833,21 +1947,20 @@ __attribute__((constructor)) static void vxInit(void) {
     p_jitwp = (int (*)(int))dlsym(RTLD_DEFAULT, "pthread_jit_write_protect_np");
     gLog = [NSMutableString new];
     gDocs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
+    vxLegacy();
     vxLog(@"[VEEX] build %d", VX_BUILD);
-
-    NSString *lastp = [gDocs stringByAppendingPathComponent:@"veex.last"];
+    NSString *lastp = vxStore("c.dat");
     NSString *last = [NSString stringWithContentsOfFile:lastp encoding:NSUTF8StringEncoding error:NULL];
     if (last.length) {
         [gLog appendString:@"--- ultimo run ---\n"];
         [gLog appendString:last];
         [[NSFileManager defaultManager] removeItemAtPath:lastp error:NULL];
     }
-    NSString *lp = [gDocs stringByAppendingPathComponent:@"veex.log"];
+    NSString *lp = vxStore("b.dat");
     NSDictionary *lat = [[NSFileManager defaultManager] attributesOfItemAtPath:lp error:NULL];
     if ([[lat objectForKey:NSFileSize] unsignedLongLongValue] > 500000)
         [[NSFileManager defaultManager] removeItemAtPath:lp error:NULL];
-
-    NSString *flag = [gDocs stringByAppendingPathComponent:@"veex.reset"];
+    NSString *flag = vxStore("e.dat");
     if ([[NSFileManager defaultManager] fileExistsAtPath:flag]) {
         [[NSFileManager defaultManager] removeItemAtPath:flag error:NULL];
         @try { vxWipe(); } @catch (NSException *e) { vxRaw("wipe EXC"); }
@@ -1862,9 +1975,11 @@ __attribute__((constructor)) static void vxInit(void) {
     dispatch_async(dispatch_get_main_queue(), ^{
         vxLog(@"[VEEX] camuflaje temprano");
         vxFindSelf();
+        vxSelfRange();
         vxPatchLoadName();
         vxPatchMainLoad();
         vxLog(@"[VEEX] AH temprano fin idx=%u ok=%d", gMyIdx, gPLok);
+        vxHashSelf();
     });
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         vxInstallBody();
