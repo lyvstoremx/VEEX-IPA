@@ -1,5 +1,5 @@
--- esp.lua V72
-log("V72 sw="..sw().." sh="..sh())
+-- esp.lua V73
+log("V73 sw="..sw().." sh="..sh())
 
 local ok = false
 local n = 0
@@ -190,10 +190,6 @@ function tick()
   clear()
 
   local w, h = sw(), sh()
-  rect(3, 3, w - 6, h - 6, 1, 0, 0, 1)
-  line(w / 2 - 25, h / 2, 50, 0, 1, 0, 0, 1)
-  line(w / 2, h / 2 - 25, 0, 50, 1, 0, 0, 1)
-
   local on = cfg("esp.on") == 1
   local box = cfg("esp.box") == 1
   local nm = cfg("esp.name") == 1
@@ -208,8 +204,8 @@ function tick()
       local tr = call(mGT, e)
       if tr and tr ~= 0 then
         local px, py, pz = gete(mGP, tr)
-        local dx, dy, dz = px - cx, py - cy, pz - cz
-        if dx * dx + dy * dy + dz * dz > 9 then
+        local dx, dz = px - cx, pz - cz
+        if dx * dx + dz * dz > 0.36 then
           local _, _, _, cw, nx, ny = w2smd(px, py, pz)
           if cw > 0.5 then
             d = d + 1
