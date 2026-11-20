@@ -1,5 +1,6 @@
--- esp.lua V73
-log("V73 sw="..sw().." sh="..sh())
+-- esp.lua V75
+log("V75 sw="..sw().." sh="..sh())
+log("ownbox=2 selftr")
 
 local ok = false
 local n = 0
@@ -10,6 +11,7 @@ local hP = 0
 local klP = 0
 local camE = 0
 local hCam = 0
+local selfTr = 0
 local frame = 0
 local ticks = 0
 local lastTry = -999
@@ -34,6 +36,7 @@ local function drop()
   arr = 0
   n = 0
   camE = 0
+  selfTr = 0
 end
 
 local function refresh()
@@ -144,15 +147,35 @@ local function setup()
   log("cam="..tostring(cam))
   if cam == 0 then return end
 
-  if camset(mW, mP, cam) then
-    camE = cam
-    hCam = gch(cam)
-    camupd()
-    matdump()
-    setcfg("esp.on", 1)
-    log("esp forzado")
-    ok = true
+  if not camset(mW, mP, cam) then return end
+  camE = cam
+  hCam = gch(cam)
+  camupd()
+  matdump()
+
+  local bestD = 1e9
+  local ctr0 = call(mGT, camE)
+  if ctr0 and ctr0 ~= 0 then
+    local ax, _, az = gete(mGP, ctr0)
+    for i = 0, n - 1 do
+      local e = arrat(arr, i)
+      if e and e ~= 0 and r64(e + 0x10) ~= 0 then
+        local tr = call(mGT, e)
+        if tr and tr ~= 0 then
+          local px, _, pz = gete(mGP, tr)
+          local dx, dz = px - ax, pz - az
+          local q = dx * dx + dz * dz
+          if q < bestD then bestD = q; selfTr = tr end
+        end
+      end
+    end
   end
+  if bestD > 25 then selfTr = 0 end
+  log("self="..tostring(selfTr).." q="..string.format("%.2f", math.sqrt(bestD)))
+
+  setcfg("esp.on", 1)
+  log("esp forzado")
+  ok = true
 end
 
 function tick()
@@ -202,7 +225,7 @@ function tick()
     local e = arrat(arr, i)
     if e ~= 0 and r64(e + 0x10) ~= 0 then
       local tr = call(mGT, e)
-      if tr and tr ~= 0 then
+      if tr and tr ~= 0 and tr ~= selfTr then
         local px, py, pz = gete(mGP, tr)
         local dx, dz = px - cx, pz - cz
         if dx * dx + dz * dz > 0.36 then
