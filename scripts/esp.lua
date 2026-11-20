@@ -1,6 +1,6 @@
--- esp.lua V76
-log("V76 sw="..sw().." sh="..sh())
-log("ownbox=2 selftr cache")
+-- esp.lua V77
+log("V77 sw="..sw().." sh="..sh())
+log("ownbox=2 selftr cache grace")
 
 local ok = false
 local n = 0
@@ -17,9 +17,10 @@ local selfTr = 0
 local frame = 0
 local ticks = 0
 local wait = 20
+local grace = 0
 local lastTry = -999
 local resolved = false
-local mFOT, mGP, mGT, mGC
+local mFOT, mGP, mGT, mGC, mW2, mP2
 local offs = {}
 
 local function boot_cfg()
@@ -114,6 +115,15 @@ local function resolve()
   local fto = sym("il2cpp_type_get_object")
   if not (fct and fto) then log("sin type"); return false end
 
+  local mF = i2c_mptr(kO, "FindObjectsOfType", 1)
+  local mT = i2c_mptr(kC, "get_transform", 0)
+  local mPp = i2c_mptr(kT, "get_position", 0)
+  local mC = i2c_mptr(kC, "GetComponent", 1)
+  local mW = i2c_mptr(kM, "get_worldToCameraMatrix", 0)
+  local mP = i2c_mptr(kM, "get_projectionMatrix", 0)
+  log("m="..tostring(mF).." "..tostring(mT).." "..tostring(mW).." "..tostring(mP))
+  if not (mF and mT and mPp and mW and mP and mC) then return false end
+
   klP = kP
   objP = call(fto, call(fct, kP))
   if hP ~= 0 then gchf(hP) end
@@ -122,14 +132,7 @@ local function resolve()
   if hObjC ~= 0 then gchf(hObjC) end
   hObjC = gch(objC)
 
-  mFOT = i2c_mptr(kO, "FindObjectsOfType", 1)
-  mGT = i2c_mptr(kC, "get_transform", 0)
-  mGP = i2c_mptr(kT, "get_position", 0)
-  mGC = i2c_mptr(kC, "GetComponent", 1)
-  local mW = i2c_mptr(kM, "get_worldToCameraMatrix", 0)
-  local mP = i2c_mptr(kM, "get_projectionMatrix", 0)
-  log("m="..tostring(mFOT).." "..tostring(mGT).." "..tostring(mW).." "..tostring(mP))
-  if not (mFOT and mGT and mGP and mW and mP and mGC) then return false end
+  mFOT, mGT, mGP, mGC, mW2, mP2 = mF, mT, mPp, mC, mW, mP
 
   findNames()
   resolved = true
@@ -174,7 +177,7 @@ local function setup()
       local e = arrat(arr, i)
       if e and e ~= 0 and r64(e + 0x10) ~= 0 then
         local tr = call(mGT, e)
-        if tr and tr ~= 0 then
+        if tr and tr ~= 0 and tr ~= ctr0 then
           local px, _, pz = gete(mGP, tr)
           local dx, dz = px - ax, pz - az
           local q = dx * dx + dz * dz
@@ -188,6 +191,7 @@ local function setup()
 
   setcfg("esp.on", 1)
   log("esp forzado")
+  grace = 10
   ok = true
 end
 
@@ -199,12 +203,15 @@ function tick()
   if camE == 0 or r64(camE + 0x10) == 0 then
     log("cam muerta")
     ok = false
+    wait = 45
     return
   end
 
+  if grace > 0 then grace = grace - 1; return end
+
   frame = frame + 1
   if frame % 8 == 0 then refresh() end
-  if n <= 0 then ok = false; return end
+  if n <= 0 then ok = false; wait = 45; return end
 
   local dead = 0
   for i = 0, n - 1 do
@@ -214,6 +221,7 @@ function tick()
   if dead * 2 > n then
     log("stale n="..n.." dead="..dead)
     ok = false
+    wait = 45
     return
   end
 
