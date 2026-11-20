@@ -1,6 +1,6 @@
--- esp.lua V75
-log("V75 sw="..sw().." sh="..sh())
-log("ownbox=2 selftr")
+-- esp.lua V76
+log("V76 sw="..sw().." sh="..sh())
+log("ownbox=2 selftr cache")
 
 local ok = false
 local n = 0
@@ -8,14 +8,18 @@ local arr = 0
 local hArr = 0
 local objP = 0
 local hP = 0
+local objC = 0
+local hObjC = 0
 local klP = 0
 local camE = 0
 local hCam = 0
 local selfTr = 0
 local frame = 0
 local ticks = 0
+local wait = 20
 local lastTry = -999
-local mFOT, mGP, mGT
+local resolved = false
+local mFOT, mGP, mGT, mGC
 local offs = {}
 
 local function boot_cfg()
@@ -94,12 +98,9 @@ local function nameOf(e)
   return nil
 end
 
-local function setup()
-  if ticks - lastTry < 20 then return end
-  lastTry = ticks
-  drop()
-  if hP ~= 0 then gchf(hP); hP = 0 end
-  if not i2c_ready() then log("sin il2cpp"); return end
+local function resolve()
+  if resolved and hP ~= 0 and hObjC ~= 0 then return true end
+  if not i2c_ready() then return false end
 
   local kP = i2c_class("COW.GamePlay", "Player")
   local kO = i2c_class("UnityEngine", "Object")
@@ -107,31 +108,43 @@ local function setup()
   local kC = i2c_class("UnityEngine", "Component")
   local kM = i2c_class("UnityEngine", "Camera")
   log("k="..tostring(kP).." "..tostring(kM))
-  if not (kP and kO and kT and kC and kM) then return end
+  if not (kP and kO and kT and kC and kM) then return false end
 
   local fct = sym("il2cpp_class_get_type")
   local fto = sym("il2cpp_type_get_object")
-  if not (fct and fto) then log("sin type"); return end
+  if not (fct and fto) then log("sin type"); return false end
 
   klP = kP
   objP = call(fto, call(fct, kP))
+  if hP ~= 0 then gchf(hP) end
   hP = gch(objP)
-  local objC = call(fto, call(fct, kM))
+  objC = call(fto, call(fct, kM))
+  if hObjC ~= 0 then gchf(hObjC) end
+  hObjC = gch(objC)
 
   mFOT = i2c_mptr(kO, "FindObjectsOfType", 1)
   mGT = i2c_mptr(kC, "get_transform", 0)
   mGP = i2c_mptr(kT, "get_position", 0)
-  local mGC = i2c_mptr(kC, "GetComponent", 1)
+  mGC = i2c_mptr(kC, "GetComponent", 1)
   local mW = i2c_mptr(kM, "get_worldToCameraMatrix", 0)
   local mP = i2c_mptr(kM, "get_projectionMatrix", 0)
   log("m="..tostring(mFOT).." "..tostring(mGT).." "..tostring(mW).." "..tostring(mP))
-  if not (mFOT and mGT and mGP and mW and mP) then return end
+  if not (mFOT and mGT and mGP and mW and mP and mGC) then return false end
 
   findNames()
+  resolved = true
+  return true
+end
 
+local function setup()
+  if ticks - lastTry < wait then return end
+  lastTry = ticks
+  wait = 20
+  if not resolve() then wait = 45; return end
+
+  drop()
   refresh()
-  log("n="..n)
-  if n <= 0 then return end
+  if n <= 0 then wait = 45; return end
 
   local cam = 0
   for i = 0, n - 1 do
@@ -145,9 +158,9 @@ local function setup()
     end
   end
   log("cam="..tostring(cam))
-  if cam == 0 then return end
+  if cam == 0 then wait = 45; return end
 
-  if not camset(mW, mP, cam) then return end
+  if not camset(mW2, mP2, cam) then wait = 45; return end
   camE = cam
   hCam = gch(cam)
   camupd()
