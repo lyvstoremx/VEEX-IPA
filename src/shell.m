@@ -1,5 +1,4 @@
-// VEEX shell build 151 — MODO CERO
-// Presencia + medición de hashes. Nada más.
+// VEEX shell build 152 — MODO CERO + DIAG
 // Sin ventana, sin ganchos, sin migración, sin script.
 
 #import <Foundation/Foundation.h>
@@ -16,9 +15,8 @@
 #include <stdio.h>
 #include <stdarg.h>
 
-#define VX_BUILD 151
+#define VX_BUILD 152
 
-// Horneados: marcador hasta tener los medidos
 static const char *VX_H  = "0000000000000000000000000000000000000000000000000000000000000000";
 static const char *VX_CD = "0000000000000000000000000000000000000000";
 
@@ -65,6 +63,36 @@ static int vxSelfIndex(void) {
     for (uint32_t i = 0; i < n; i++)
         if (_dyld_get_image_header(i) == (const struct mach_header *)h) return (int)i;
     return -1;
+}
+
+static void vxImgs(void) {
+    uint32_t n = _dyld_image_count();
+    uint32_t lim = n < 12 ? n : 12;
+    for (uint32_t i = 0; i < lim; i++) {
+        const char *p = _dyld_get_image_name(i);
+        vxLog(@"i%u %s", i, p ? p : "?");
+    }
+}
+
+static void vxCsDiag(const struct mach_header_64 *h) {
+    if (!h) { vxLog(@"cs hdr=0"); return; }
+    const struct load_command *lc = (const void *)(h + 1);
+    for (uint32_t i = 0; i < h->ncmds; i++) {
+        if (lc->cmd == LC_CODE_SIGNATURE) {
+            const struct linkedit_data_command *cs = (const void *)lc;
+            vxLog(@"cs lc=1 off=%u size=%u", cs->dataoff, cs->datasize);
+            if (cs->datasize >= 12) {
+                const uint8_t *b = (const uint8_t *)h + cs->dataoff;
+                vxLog(@"cs magic=%08x len=%u cnt=%u",
+                      *(const uint32_t *)b,
+                      *(const uint32_t *)(b + 4),
+                      *(const uint32_t *)(b + 8));
+            }
+            return;
+        }
+        lc = (const void *)((const char *)lc + lc->cmdsize);
+    }
+    vxLog(@"cs lc=0");
 }
 
 static int vxTextRange(const struct mach_header_64 *h, uintptr_t *addr, size_t *len) {
@@ -145,16 +173,19 @@ static void vxRun(void) {
     struct utsname u; memset(&u, 0, sizeof(u)); uname(&u);
     Dl_info di; memset(&di, 0, sizeof(di)); dladdr((void *)&vxHdr, &di);
 
-    vxLog(@"==== arranque modo cero ====");
+    vxLog(@"==== arranque modo cero diag ====");
     vxLog(@"ios=%@ hw=%s", UIDevice.currentDevice.systemVersion, u.machine);
     vxLog(@"imgs=%u self=%d", _dyld_image_count(), vxSelfIndex());
     vxLog(@"path=%s", di.dli_fname ? di.dli_fname : "?");
     vxFlags();
+    vxImgs();
+
+    const struct mach_header_64 *h = vxHdr();
+    vxCsDiag(h);
 
     NSString *bh = [NSString stringWithUTF8String:VX_H];
     NSString *bc = [NSString stringWithUTF8String:VX_CD];
 
-    const struct mach_header_64 *h = vxHdr();
     uintptr_t ta = 0; size_t tl = 0;
     if (h && vxTextRange(h, &ta, &tl)) {
         vxLog(@"txt=0x%lx len=%zu", (unsigned long)ta, tl);
