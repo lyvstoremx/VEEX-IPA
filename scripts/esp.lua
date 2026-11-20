@@ -1,5 +1,5 @@
--- esp.lua V71
-log("V71 sw="..sw().." sh="..sh())
+-- esp.lua V72
+log("V72 sw="..sw().." sh="..sh())
 
 local ok = false
 local n = 0
@@ -227,7 +227,7 @@ function tick()
                 if ln then line(sx, by, w / 2 - sx, -by, 1, 1, 1, 0.85) end
                 if nm then
                   local s = nameOf(e)
-                  if s then text(s, sx - #s * 3, by - 13, 1, 1, 1, 1) end
+                  if s then text(s, sx - #s * 3.3, by - 13, 1, 1, 1, 1) end
                 end
               end
             end
