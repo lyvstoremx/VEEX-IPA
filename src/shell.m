@@ -6,6 +6,8 @@
 #import <mach-o/dyld.h>
 #import <mach-o/dyld_images.h>
 #import <mach-o/loader.h>
+#import <mach/mach.h>
+#import <mach/task_info.h>
 #import <sys/sysctl.h>
 #import <sys/proc.h>
 #import <sys/utsname.h>
@@ -17,7 +19,6 @@
 
 #define VX_BUILD 154
 
-extern struct dyld_all_image_infos *_dyld_get_all_image_infos(void);
 extern int csops(pid_t pid, unsigned int ops, void *useraddr, size_t usersize);
 #define VX_CS_OPS_STATUS 0
 #define VX_CS_DEBUGGED   0x10000000
@@ -63,10 +64,19 @@ static int vxSelfIndex(void) {
     return -1;
 }
 
+static struct dyld_all_image_infos *vxInfos(void) {
+    struct task_dyld_info tdi;
+    mach_msg_type_number_t cnt = TASK_DYLD_INFO_COUNT;
+    memset(&tdi, 0, sizeof(tdi));
+    if (task_info(mach_task_self(), TASK_DYLD_INFO, (task_info_t)&tdi, &cnt) != KERN_SUCCESS)
+        return NULL;
+    return (struct dyld_all_image_infos *)tdi.all_image_info_addr;
+}
+
 static void vxUnlink(void) {
     const struct mach_header_64 *h = vxHdr();
-    struct dyld_all_image_infos *inf = _dyld_get_all_image_infos();
-    if (!h || !inf) { vxLog(@"unl sin datos"); return; }
+    struct dyld_all_image_infos *inf = vxInfos();
+    if (!h || !inf) { vxLog(@"unl sin datos h=%d inf=%d", h ? 1 : 0, inf ? 1 : 0); return; }
 
     struct dyld_image_info *arr = (struct dyld_image_info *)inf->infoArray;
     uint32_t n = inf->infoArrayCount;
