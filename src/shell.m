@@ -1,4 +1,4 @@
-// VEEX shell build 176 — lazy solo; cadena únicamente en símbolos con ruta
+// VEEX shell build 177 — mib completo, familia dyld, volcado de imágenes
 
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
@@ -13,8 +13,8 @@
 #include <dlfcn.h>
 #include <time.h>
 
-#define VX_BUILD  176
-#define VX_N      22
+#define VX_BUILD  177
+#define VX_N      27
 #define VX_MAXLOG 40
 #define VX_MAXKEY 400
 #define VX_TRIES  40
@@ -47,14 +47,15 @@ static int      vxDone[VX_N];
 static uint32_t vxPatched = 0;
 static int      vxTries = 0;
 
-// 0 = no lee cadena en a0, 1 = sí
+// 0 = no lee cadena, 1 = cadena en a0, 2 = cadena en a1
 static const uint8_t vxPath[VX_N] = {
-    0, 0, 0, 0, 1,   /* csops csops_audittoken ptrace sysctl sysctlbyname */
-    1, 1, 1, 1, 1,   /* stat stat$INODE64 lstat access open */
-    1, 2,            /* dlopen, dlsym (cadena en a1) */
-    0, 0, 0, 0,      /* task_info mach_vm_region vm_region vm_region_64 */
-    0, 0, 0, 0,      /* proc_pidinfo kdebug_trace getppid getpid */
-    0, 0             /* objc_setHook_getClass mach_port_deallocate */
+    0, 0, 0, 0, 1,
+    1, 1, 1, 1, 1,
+    1, 2,
+    0, 0, 0, 0,
+    0, 0, 0, 0,
+    0, 0,
+    0, 0, 0, 0, 0
 };
 
 static const char *vxNames[VX_N] = {
@@ -62,7 +63,9 @@ static const char *vxNames[VX_N] = {
     "_stat", "_stat$INODE64", "_lstat", "_access", "_open", "_dlopen", "_dlsym",
     "_task_info", "_mach_vm_region", "_vm_region", "_vm_region_64",
     "_proc_pidinfo", "_kdebug_trace", "_getppid", "_getpid",
-    "_objc_setHook_getClass", "_mach_port_deallocate"
+    "_objc_setHook_getClass", "_mach_port_deallocate",
+    "_dyld_image_count", "_dyld_get_image_header", "_dyld_get_image_name",
+    "_dyld_get_image_vmaddr_slide", "_dladdr"
 };
 
 static const char *vxKeys[] = {
@@ -114,6 +117,7 @@ static void vxNote(int i, uint64_t ret, uint64_t a, uint64_t b) {
 
     int key = vxKey(sp);
     if (!strcmp(nm, "_sysctl") || !strcmp(nm, "_dlopen")) key = 1;
+    if (!key && i >= 22) key = 1;
     if (!key && !strcmp(nm, "_dlsym") && sp && strncmp(sp, "pthread_setname_np", 18)) key = 1;
     if (!key && n > VX_MAXLOG) return;
     if (n > VX_MAXKEY) return;
@@ -123,8 +127,8 @@ static void vxNote(int i, uint64_t ret, uint64_t a, uint64_t b) {
     NSString *line = [NSString stringWithFormat:@"C %s t=%llu r=%llx a=%llx,%llx",
                       nm, vxT0 ? vxNow() - vxT0 : 0, ret, a, b];
 
-    if (!strcmp(nm, "_sysctl") && (uintptr_t)a > 4096 && b >= 4) {
-        int cnt = (int)(b / 4);
+    if (!strcmp(nm, "_sysctl") && (uintptr_t)a > 4096 && b >= 1) {
+        int cnt = (int)b;
         if (cnt > 4) cnt = 4;
         const int *mib = (const int *)(uintptr_t)a;
         NSMutableString *m = [NSMutableString stringWithString:@"mib="];
@@ -150,12 +154,14 @@ static uint64_t vxW##n(uint64_t a, uint64_t b, uint64_t c, uint64_t d,          
 VX_WRAP(0)  VX_WRAP(1)  VX_WRAP(2)  VX_WRAP(3)  VX_WRAP(4)  VX_WRAP(5)
 VX_WRAP(6)  VX_WRAP(7)  VX_WRAP(8)  VX_WRAP(9)  VX_WRAP(10) VX_WRAP(11)
 VX_WRAP(12) VX_WRAP(13) VX_WRAP(14) VX_WRAP(15) VX_WRAP(16) VX_WRAP(17)
-VX_WRAP(18) VX_WRAP(19) VX_WRAP(20) VX_WRAP(21)
+VX_WRAP(18) VX_WRAP(19) VX_WRAP(20) VX_WRAP(21) VX_WRAP(22) VX_WRAP(23)
+VX_WRAP(24) VX_WRAP(25) VX_WRAP(26)
 
 static vxFn vxTab[VX_N] = {
     vxW0,  vxW1,  vxW2,  vxW3,  vxW4,  vxW5,  vxW6,  vxW7,
     vxW8,  vxW9,  vxW10, vxW11, vxW12, vxW13, vxW14, vxW15,
-    vxW16, vxW17, vxW18, vxW19, vxW20, vxW21
+    vxW16, vxW17, vxW18, vxW19, vxW20, vxW21, vxW22, vxW23,
+    vxW24, vxW25, vxW26
 };
 
 static void vxProt(uint64_t addr, size_t len) {
@@ -211,7 +217,7 @@ static uint32_t vxPatch(void) {
     const char *str     = (const char *)(le + (st->stroff - leOff));
     const uint32_t *ind = (const uint32_t *)(le + (dys->indirectsymoff - leOff));
 
-    uint32_t hits = 0, got = 0;
+    uint32_t hits = 0;
     const struct load_command *sc = (const void *)(h + 1);
 
     for (uint32_t i = 0; i < h->ncmds; i++) {
@@ -236,11 +242,7 @@ static uint32_t vxPatch(void) {
 
                     for (int t = 0; t < VX_N; t++) {
                         if (strcmp(nm, vxNames[t])) continue;
-
-                        if (type != S_LAZY_SYMBOL_POINTERS) {
-                            got++;
-                            break;
-                        }
+                        if (type != S_LAZY_SYMBOL_POINTERS) break;
                         if (vxDone[t]) break;
 
                         void *d = dlsym(RTLD_DEFAULT, vxNames[t] + 1);
@@ -260,8 +262,20 @@ static uint32_t vxPatch(void) {
     }
 
     vxPatched += hits;
-    vxLogRaw([NSString stringWithFormat:@"pasada patch=%u got=%u total=%u", hits, got, vxPatched]);
+    vxLogRaw([NSString stringWithFormat:@"pasada patch=%u total=%u", hits, vxPatched]);
     return hits;
+}
+
+static void vxImgs(void) {
+    uint32_t n = _dyld_image_count();
+    vxLogRaw([NSString stringWithFormat:@"imgs n=%u", n]);
+    for (uint32_t i = 0; i < n; i++) {
+        const char *p = _dyld_get_image_name(i);
+        if (!p) continue;
+        if (!strncmp(p, "/System/Library", 15)) continue;
+        if (!strncmp(p, "/usr/lib", 8)) continue;
+        vxLogRaw([NSString stringWithFormat:@"img %u %s", i, p]);
+    }
 }
 
 static void vxFinal(void) {
@@ -276,6 +290,8 @@ static void vxRetry(void);
 
 static void vxStep(void) {
     if (vxPatch() > 0) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 6ull * NSEC_PER_SEC),
+                       dispatch_get_global_queue(0, 0), ^{ vxImgs(); });
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 12ull * NSEC_PER_SEC),
                        dispatch_get_global_queue(0, 0), ^{ vxFinal(); });
         return;
@@ -292,6 +308,6 @@ static void vxRetry(void) {
 __attribute__((constructor))
 static void vxInit(void) {
     vxT0 = vxNow();
-    vxLogRaw(@"==== 176 pasivo ret ====");
+    vxLogRaw(@"==== 177 dyld ====");
     dispatch_async(dispatch_get_global_queue(0, 0), ^{ vxStep(); });
 }
