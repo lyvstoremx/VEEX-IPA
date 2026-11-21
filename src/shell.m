@@ -1,4 +1,4 @@
-// VEEX shell build 173 — enganche pasivo por LC_DYSYMTAB (UnityFramework, __la_symbol_ptr)
+// VEEX shell build 174 — pasivo con retorno, mib y tiempo; GOT solo si el slot es plano
 
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
@@ -11,10 +11,12 @@
 #include <stdint.h>
 #include <pthread.h>
 #include <dlfcn.h>
+#include <time.h>
 
-#define VX_BUILD  173
+#define VX_BUILD  174
 #define VX_N      22
 #define VX_MAXLOG 40
+#define VX_MAXKEY 400
 #define VX_TRIES  40
 
 #ifndef SECTION_TYPE
@@ -37,9 +39,11 @@ typedef uint64_t (*vxFn)(uint64_t, uint64_t, uint64_t, uint64_t,
 static pthread_mutex_t vxM = PTHREAD_MUTEX_INITIALIZER;
 static FILE *vxF = NULL;
 static __thread int vxBusy = 0;
+static uint64_t vxT0 = 0;
 
 static vxFn     vxOrig[VX_N];
 static uint32_t vxCount[VX_N];
+static int      vxDone[VX_N];
 static uint32_t vxPatched = 0;
 static int      vxTries = 0;
 
@@ -51,8 +55,22 @@ static const char *vxNames[VX_N] = {
     "_objc_setHook_getClass", "_mach_port_deallocate"
 };
 
+static const char *vxKeys[] = {
+    "mobileprovision", "SignedByEsign", "Cydia", "Sileo", "sshd", "apt",
+    "stash", "dpkg", "liblog.so", "substrate", "ellekit", "hooker",
+    "injector", "systemhook", "loader.app", "suid_profile", "binpack",
+    "cydia", "var/lib", "var/Lib", "sftp", NULL
+};
+
 static NSString *vxDoc(void) {
     return NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
+}
+
+static uint64_t vxNow(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    uint64_t ms = (uint64_t)ts.tv_sec * 1000ull + (uint64_t)ts.tv_nsec / 1000000ull;
+    return vxT0 ? ms - vxT0 : 0;
 }
 
 static void vxLogRaw(NSString *s) {
@@ -68,21 +86,41 @@ static void vxLogRaw(NSString *s) {
     pthread_mutex_unlock(&vxM);
 }
 
-static void vxNote(int i, uint64_t a, uint64_t b, uint64_t c, uint64_t d) {
+static int vxKey(const char *s) {
+    if (!s) return 0;
+    for (int i = 0; vxKeys[i]; i++) {
+        if (strstr(s, vxKeys[i])) return 1;
+    }
+    return 0;
+}
+
+static void vxNote(int i, uint64_t ret, uint64_t a, uint64_t b) {
     uint32_t n = __atomic_add_fetch(&vxCount[i], 1, __ATOMIC_RELAXED);
-    if (n > VX_MAXLOG) return;
+    const char *nm = vxNames[i];
+
+    const char *sp = NULL;
+    if (!strcmp(nm, "_dlsym")) sp = (const char *)b;
+    else sp = (const char *)a;
+
+    int key = vxKey(sp);
+    if (!strcmp(nm, "_sysctl") || !strcmp(nm, "_dlopen") || !strcmp(nm, "_getppid")) key = 1;
+    if (!key && !strcmp(nm, "_dlsym") && sp && strncmp(sp, "pthread_setname_np", 18)) key = 1;
+    if (!key && n > VX_MAXLOG) return;
+    if (n > VX_MAXKEY) return;
     if (vxBusy) return;
     vxBusy = 1;
 
-    const char *nm = vxNames[i];
-    const char *sp = NULL;
-    if (!strcmp(nm, "_dlsym")) sp = (const char *)b;
-    else if (!strcmp(nm, "_dlopen") || !strcmp(nm, "_sysctlbyname") ||
-             !strcmp(nm, "_open") || !strcmp(nm, "_stat") ||
-             !strcmp(nm, "_lstat") || !strcmp(nm, "_access")) sp = (const char *)a;
+    NSString *line = [NSString stringWithFormat:@"C %s t=%llu r=%llx a=%llx,%llx",
+                      nm, vxNow(), ret, a, b];
 
-    NSString *line = [NSString stringWithFormat:@"C %s c=%u a=%llx,%llx,%llx,%llx",
-                      nm, n, a, b, c, d];
+    if (!strcmp(nm, "_sysctl") && (uintptr_t)a > 4096 && b >= 4) {
+        int cnt = (int)(b / 4);
+        if (cnt > 4) cnt = 4;
+        const int *mib = (const int *)(uintptr_t)a;
+        NSMutableString *m = [NSMutableString stringWithString:@"mib="];
+        for (int k = 0; k < cnt; k++) [m appendFormat:@"%d,", mib[k]];
+        line = [line stringByAppendingFormat:@" %@", m];
+    }
     if (sp && (uintptr_t)sp > 4096) {
         size_t len = strnlen(sp, 150);
         if (len > 0 && len < 150) line = [line stringByAppendingFormat:@" s=%s", sp];
@@ -94,8 +132,9 @@ static void vxNote(int i, uint64_t a, uint64_t b, uint64_t c, uint64_t d) {
 #define VX_WRAP(n)                                                                   \
 static uint64_t vxW##n(uint64_t a, uint64_t b, uint64_t c, uint64_t d,               \
                        uint64_t e, uint64_t f, uint64_t g, uint64_t h) {             \
-    vxNote(n, a, b, c, d);                                                           \
-    return vxOrig[n] ? vxOrig[n](a, b, c, d, e, f, g, h) : 0;                        \
+    uint64_t r = vxOrig[n] ? vxOrig[n](a, b, c, d, e, f, g, h) : 0;                  \
+    vxNote(n, r, a, b);                                                              \
+    return r;                                                                        \
 }
 
 VX_WRAP(0)  VX_WRAP(1)  VX_WRAP(2)  VX_WRAP(3)  VX_WRAP(4)  VX_WRAP(5)
@@ -120,9 +159,7 @@ static void vxProt(uint64_t addr, size_t len) {
 static const struct mach_header_64 *vxFind(void) {
     for (uint32_t i = 0, n = _dyld_image_count(); i < n; i++) {
         const char *p = _dyld_get_image_name(i);
-        if (p && strstr(p, "UnityFramework")) {
-            return (const void *)_dyld_get_image_header(i);
-        }
+        if (p && strstr(p, "UnityFramework")) return (const void *)_dyld_get_image_header(i);
     }
     return NULL;
 }
@@ -164,7 +201,7 @@ static uint32_t vxPatch(void) {
     const char *str     = (const char *)(le + (st->stroff - leOff));
     const uint32_t *ind = (const uint32_t *)(le + (dys->indirectsymoff - leOff));
 
-    uint32_t hits = 0, got = 0;
+    uint32_t hits = 0, sig = 0;
     const struct load_command *sc = (const void *)(h + 1);
 
     for (uint32_t i = 0; i < h->ncmds; i++) {
@@ -189,21 +226,27 @@ static uint32_t vxPatch(void) {
 
                     for (int t = 0; t < VX_N; t++) {
                         if (strcmp(nm, vxNames[t])) continue;
-                        if (vxCount[t]) break;
-                        if (type != S_LAZY_SYMBOL_POINTERS) {
-                            vxLogRaw([NSString stringWithFormat:@"GOT %s", nm]);
-                            got++;
-                            break;
-                        }
-                        if (!vxOrig[t]) {
-                            void *d = dlsym(RTLD_DEFAULT, vxNames[t] + 1);
-                            vxOrig[t] = (vxFn)d;
-                        }
+                        if (vxDone[t]) break;
+
+                        void *d = dlsym(RTLD_DEFAULT, vxNames[t] + 1);
+                        if (!vxOrig[t]) vxOrig[t] = (vxFn)d;
+
                         uint64_t *slot = (uint64_t *)(base + k * 8);
+                        if (type != S_LAZY_SYMBOL_POINTERS) {
+                            if (*slot != (uint64_t)d) {
+                                vxLogRaw([NSString stringWithFormat:
+                                          @"GOT %s slot=%llx dlsym=%llx firmado",
+                                          nm, (uint64_t)*slot, (uint64_t)d]);
+                                sig++;
+                                break;
+                            }
+                        }
                         vxProt((uint64_t)slot, 8);
                         *slot = (uint64_t)vxTab[t];
-                        vxLogRaw([NSString stringWithFormat:@"P %s slot=%llx orig=%llx",
-                                  nm, (uint64_t)slot, (uint64_t)vxOrig[t]]);
+                        vxDone[t] = 1;
+                        vxLogRaw([NSString stringWithFormat:@"P %s %s slot=%llx",
+                                  nm, type == S_LAZY_SYMBOL_POINTERS ? "lazy" : "got",
+                                  (uint64_t)slot]);
                         hits++;
                         break;
                     }
@@ -214,8 +257,8 @@ static uint32_t vxPatch(void) {
     }
 
     vxPatched += hits;
-    vxLogRaw([NSString stringWithFormat:@"pasada patch=%u got=%u total=%u ind=%u",
-              hits, got, vxPatched, dys->nindirectsyms]);
+    vxLogRaw([NSString stringWithFormat:@"pasada patch=%u firmados=%u total=%u",
+              hits, sig, vxPatched]);
     return hits;
 }
 
@@ -246,6 +289,10 @@ static void vxRetry(void) {
 
 __attribute__((constructor))
 static void vxInit(void) {
-    vxLogRaw(@"==== 173 pasivo ====");
+    vxT0 = vxNow() ? 0 : 0;
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    vxT0 = (uint64_t)ts.tv_sec * 1000ull + (uint64_t)ts.tv_nsec / 1000000ull;
+    vxLogRaw(@"==== 174 pasivo ret ====");
     dispatch_async(dispatch_get_global_queue(0, 0), ^{ vxStep(); });
 }
