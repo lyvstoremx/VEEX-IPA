@@ -1,4 +1,4 @@
-// VEEX shell build 175 — lazy solo; retorno, mib y tiempo
+// VEEX shell build 176 — lazy solo; cadena únicamente en símbolos con ruta
 
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
@@ -13,7 +13,7 @@
 #include <dlfcn.h>
 #include <time.h>
 
-#define VX_BUILD  175
+#define VX_BUILD  176
 #define VX_N      22
 #define VX_MAXLOG 40
 #define VX_MAXKEY 400
@@ -46,6 +46,16 @@ static uint32_t vxCount[VX_N];
 static int      vxDone[VX_N];
 static uint32_t vxPatched = 0;
 static int      vxTries = 0;
+
+// 0 = no lee cadena en a0, 1 = sí
+static const uint8_t vxPath[VX_N] = {
+    0, 0, 0, 0, 1,   /* csops csops_audittoken ptrace sysctl sysctlbyname */
+    1, 1, 1, 1, 1,   /* stat stat$INODE64 lstat access open */
+    1, 2,            /* dlopen, dlsym (cadena en a1) */
+    0, 0, 0, 0,      /* task_info mach_vm_region vm_region vm_region_64 */
+    0, 0, 0, 0,      /* proc_pidinfo kdebug_trace getppid getpid */
+    0, 0             /* objc_setHook_getClass mach_port_deallocate */
+};
 
 static const char *vxNames[VX_N] = {
     "_csops", "_csops_audittoken", "_ptrace", "_sysctl", "_sysctlbyname",
@@ -97,10 +107,13 @@ static void vxNote(int i, uint64_t ret, uint64_t a, uint64_t b) {
     uint32_t n = __atomic_add_fetch(&vxCount[i], 1, __ATOMIC_RELAXED);
     const char *nm = vxNames[i];
 
-    const char *sp = (!strcmp(nm, "_dlsym")) ? (const char *)b : (const char *)a;
+    const char *sp = NULL;
+    if (vxPath[i] == 1) sp = (const char *)a;
+    else if (vxPath[i] == 2) sp = (const char *)b;
+    if (sp && (uintptr_t)sp <= 4096) sp = NULL;
 
     int key = vxKey(sp);
-    if (!strcmp(nm, "_sysctl") || !strcmp(nm, "_dlopen") || !strcmp(nm, "_getppid")) key = 1;
+    if (!strcmp(nm, "_sysctl") || !strcmp(nm, "_dlopen")) key = 1;
     if (!key && !strcmp(nm, "_dlsym") && sp && strncmp(sp, "pthread_setname_np", 18)) key = 1;
     if (!key && n > VX_MAXLOG) return;
     if (n > VX_MAXKEY) return;
@@ -118,7 +131,7 @@ static void vxNote(int i, uint64_t ret, uint64_t a, uint64_t b) {
         for (int k = 0; k < cnt; k++) [m appendFormat:@"%d,", mib[k]];
         line = [line stringByAppendingFormat:@" %@", m];
     }
-    if (sp && (uintptr_t)sp > 4096) {
+    if (sp) {
         size_t len = strnlen(sp, 150);
         if (len > 0 && len < 150) line = [line stringByAppendingFormat:@" s=%s", sp];
     }
@@ -225,9 +238,6 @@ static uint32_t vxPatch(void) {
                         if (strcmp(nm, vxNames[t])) continue;
 
                         if (type != S_LAZY_SYMBOL_POINTERS) {
-                            uint64_t *gs = (uint64_t *)(base + k * 8);
-                            vxLogRaw([NSString stringWithFormat:@"GOT %s slot=%llx v=%llx",
-                                      nm, (uint64_t)gs, *gs]);
                             got++;
                             break;
                         }
@@ -240,7 +250,6 @@ static uint32_t vxPatch(void) {
                         vxProt((uint64_t)slot, 8);
                         *slot = (uint64_t)vxTab[t];
                         vxDone[t] = 1;
-                        vxLogRaw([NSString stringWithFormat:@"P %s slot=%llx", nm, (uint64_t)slot]);
                         hits++;
                         break;
                     }
@@ -283,6 +292,6 @@ static void vxRetry(void) {
 __attribute__((constructor))
 static void vxInit(void) {
     vxT0 = vxNow();
-    vxLogRaw(@"==== 175 pasivo ret ====");
+    vxLogRaw(@"==== 176 pasivo ret ====");
     dispatch_async(dispatch_get_global_queue(0, 0), ^{ vxStep(); });
 }
