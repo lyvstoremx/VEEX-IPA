@@ -1,4 +1,4 @@
-// VEEX shell build 168 — símbolos de UnityFramework por vmaddr
+// VEEX shell build 169 — lista limpia de imports del sistema
 
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
@@ -8,8 +8,8 @@
 #include <stdio.h>
 #include <ctype.h>
 
-#define VX_BUILD 168
-#define VX_CAP 500
+#define VX_BUILD 169
+#define VX_CAP 400
 
 static NSString *vxDoc(void) {
     return NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
@@ -23,21 +23,22 @@ static void vxLog(NSString *s) {
     fclose(f);
 }
 
-static int vxKey(const char *s) {
-    static const char *k[] = { "fair", "guard", "fg_", "csops", "ptrace", "tamper",
-                               "jbdetect", "jailbreak", "sysctl", "cheat", "detect",
-                               "anticheat", "anti_cheat", "hook", "mod", NULL };
+static const char *vxKey(const char *s) {
+    static const char *k[] = { "csops", "ptrace", "sysctl", "stat", "access", "open",
+                               "dlopen", "dlsym", "task_info", "vm_region", "proc_pidinfo",
+                               "kdebug", "getppid", "objc_sethook", "hook", "jailbreak",
+                               "fair", "guard", "check", NULL };
     char b[220];
     size_t n = strlen(s);
     size_t m = n < sizeof(b) - 1 ? n : sizeof(b) - 1;
     for (size_t i = 0; i < m; i++) b[i] = (char)tolower((unsigned char)s[i]);
     b[m] = 0;
-    for (int i = 0; k[i]; i++) if (strstr(b, k[i])) return 1;
-    return 0;
+    for (int i = 0; k[i]; i++) if (strstr(b, k[i])) return k[i];
+    return NULL;
 }
 
 static void vxRun(void) {
-    vxLog(@"==== simbolos 168 ====");
+    vxLog(@"==== imports ====");
     const struct mach_header_64 *h = NULL;
     uint32_t n = _dyld_image_count();
     for (uint32_t i = 0; i < n; i++) {
@@ -64,16 +65,15 @@ static void vxRun(void) {
 
     const uint8_t *le = (const uint8_t *)h + (leVm - txtVm);
     const char *str = (const char *)(le + (st->stroff - leOff));
-    vxLog([NSString stringWithFormat:@"strsize=%u nsyms=%u", st->strsize, st->nsyms]);
 
     uint32_t hits = 0;
     for (uint32_t off = 0; off < st->strsize && hits < VX_CAP; off++) {
         const char *s = str + off;
         if (!*s) continue;
         size_t len = strlen(s);
-        if (len >= 3 && len <= 200 && vxKey(s)) {
-            vxLog([NSString stringWithFormat:@"S %s", s]);
-            hits++;
+        if (len >= 3 && len <= 200) {
+            const char *kw = vxKey(s);
+            if (kw) { vxLog([NSString stringWithFormat:@"[%s] %s", kw, s]); hits++; }
         }
         off += len;
     }
