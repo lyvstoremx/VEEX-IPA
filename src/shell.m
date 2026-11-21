@@ -1,4 +1,4 @@
-// VEEX shell build 166 — volcado crudo de LC_SYMTAB
+// VEEX shell build 167 — lectura por dirección virtual del segmento
 
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
@@ -7,7 +7,7 @@
 #include <string.h>
 #include <stdio.h>
 
-#define VX_BUILD 166
+#define VX_BUILD 167
 
 static NSString *vxDoc(void) {
     return NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
@@ -28,41 +28,44 @@ static NSString *vxHex(const uint8_t *p, size_t n) {
 }
 
 static void vxRun(void) {
-    vxLog(@"==== crudo symtab ====");
+    vxLog(@"==== lectura por vmaddr ====");
     const struct mach_header_64 *h = NULL;
-    int idx = -1;
     uint32_t n = _dyld_image_count();
     for (uint32_t i = 0; i < n; i++) {
         const char *p = _dyld_get_image_name(i);
-        if (p && strstr(p, "UnityFramework")) { h = (const void *)_dyld_get_image_header(i); idx = (int)i; break; }
+        if (p && strstr(p, "UnityFramework")) { h = (const void *)_dyld_get_image_header(i); break; }
     }
     if (!h) { vxLog(@"sin unity"); return; }
-    vxLog([NSString stringWithFormat:@"idx=%d h=%lx slide=%lx", idx, (unsigned long)(uintptr_t)h,
-           (unsigned long)_dyld_get_image_vmaddr_slide(idx)]);
 
     const struct load_command *lc = (const void *)(h + 1);
     const struct symtab_command *st = NULL;
-    uint64_t leOff = 0, leSize = 0;
+    uint64_t txtVm = 0;
+    uint64_t leVm = 0, leOff = 0, leSize = 0;
     for (uint32_t i = 0; i < h->ncmds; i++) {
-        if (lc->cmdsize < 8) { vxLog(@"cmd roto"); break; }
+        if (lc->cmdsize < 8) break;
         if (lc->cmd == LC_SYMTAB) st = (const void *)lc;
         if (lc->cmd == LC_SEGMENT_64) {
             const struct segment_command_64 *sg = (const void *)lc;
-            if (!strcmp(sg->segname, "__LINKEDIT")) { leOff = sg->fileoff; leSize = sg->filesize; }
+            if (!strcmp(sg->segname, "__TEXT")) txtVm = sg->vmaddr;
+            if (!strcmp(sg->segname, "__LINKEDIT")) { leVm = sg->vmaddr; leOff = sg->fileoff; leSize = sg->filesize; }
         }
         lc = (const void *)((const char *)lc + lc->cmdsize);
     }
-    vxLog([NSString stringWithFormat:@"linkedit off=%llu size=%llu", leOff, leSize]);
+    vxLog([NSString stringWithFormat:@"txtVm=%llu leVm=%llu leOff=%llu leSize=%llu", txtVm, leVm, leOff, leSize]);
     if (!st) { vxLog(@"sin LC_SYMTAB"); return; }
+    if (!leVm || !leSize) { vxLog(@"sin linkedit"); return; }
 
-    vxLog([NSString stringWithFormat:@"symoff=%u nsyms=%u stroff=%u strsize=%u",
-           st->symoff, st->nsyms, st->stroff, st->strsize]);
-    vxLog([NSString stringWithFormat:@"dentro_LE sym=%d str=%d",
-           (st->symoff >= leOff && st->symoff < leOff + leSize) ? 1 : 0,
-           (st->stroff >= leOff && st->stroff < leOff + leSize) ? 1 : 0]);
+    uint64_t delta = leVm - txtVm;
+    const uint8_t *le = (const uint8_t *)h + delta;
+    vxLog([NSString stringWithFormat:@"le=%lx", (unsigned long)(uintptr_t)le]);
+    vxLog([NSString stringWithFormat:@"hex_le %@", vxHex(le, 32)]);
 
-    vxLog([NSString stringWithFormat:@"hex_sym %@", vxHex((const uint8_t *)h + st->symoff, 48)]);
-    vxLog([NSString stringWithFormat:@"hex_str %@", vxHex((const uint8_t *)h + st->stroff, 48)]);
+    if (st->stroff < leOff || st->stroff >= leOff + leSize) { vxLog(@"stroff fuera"); return; }
+    if (st->symoff < leOff || st->symoff >= leOff + leSize) { vxLog(@"symoff fuera"); return; }
+
+    const uint8_t *sp = le + (st->stroff - leOff);
+    vxLog([NSString stringWithFormat:@"str@%lx hex %@", (unsigned long)(uintptr_t)sp, vxHex(sp, 48)]);
+    vxLog([NSString stringWithFormat:@"primero=%.60s", (const char *)sp + 1]);
 }
 
 __attribute__((constructor))
