@@ -1,4 +1,4 @@
-// VEEX shell build 174 — pasivo con retorno, mib y tiempo; GOT solo si el slot es plano
+// VEEX shell build 175 — lazy solo; retorno, mib y tiempo
 
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
@@ -13,7 +13,7 @@
 #include <dlfcn.h>
 #include <time.h>
 
-#define VX_BUILD  174
+#define VX_BUILD  175
 #define VX_N      22
 #define VX_MAXLOG 40
 #define VX_MAXKEY 400
@@ -69,8 +69,7 @@ static NSString *vxDoc(void) {
 static uint64_t vxNow(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
-    uint64_t ms = (uint64_t)ts.tv_sec * 1000ull + (uint64_t)ts.tv_nsec / 1000000ull;
-    return vxT0 ? ms - vxT0 : 0;
+    return (uint64_t)ts.tv_sec * 1000ull + (uint64_t)ts.tv_nsec / 1000000ull;
 }
 
 static void vxLogRaw(NSString *s) {
@@ -98,9 +97,7 @@ static void vxNote(int i, uint64_t ret, uint64_t a, uint64_t b) {
     uint32_t n = __atomic_add_fetch(&vxCount[i], 1, __ATOMIC_RELAXED);
     const char *nm = vxNames[i];
 
-    const char *sp = NULL;
-    if (!strcmp(nm, "_dlsym")) sp = (const char *)b;
-    else sp = (const char *)a;
+    const char *sp = (!strcmp(nm, "_dlsym")) ? (const char *)b : (const char *)a;
 
     int key = vxKey(sp);
     if (!strcmp(nm, "_sysctl") || !strcmp(nm, "_dlopen") || !strcmp(nm, "_getppid")) key = 1;
@@ -111,7 +108,7 @@ static void vxNote(int i, uint64_t ret, uint64_t a, uint64_t b) {
     vxBusy = 1;
 
     NSString *line = [NSString stringWithFormat:@"C %s t=%llu r=%llx a=%llx,%llx",
-                      nm, vxNow(), ret, a, b];
+                      nm, vxT0 ? vxNow() - vxT0 : 0, ret, a, b];
 
     if (!strcmp(nm, "_sysctl") && (uintptr_t)a > 4096 && b >= 4) {
         int cnt = (int)(b / 4);
@@ -201,7 +198,7 @@ static uint32_t vxPatch(void) {
     const char *str     = (const char *)(le + (st->stroff - leOff));
     const uint32_t *ind = (const uint32_t *)(le + (dys->indirectsymoff - leOff));
 
-    uint32_t hits = 0, sig = 0;
+    uint32_t hits = 0, got = 0;
     const struct load_command *sc = (const void *)(h + 1);
 
     for (uint32_t i = 0; i < h->ncmds; i++) {
@@ -226,27 +223,24 @@ static uint32_t vxPatch(void) {
 
                     for (int t = 0; t < VX_N; t++) {
                         if (strcmp(nm, vxNames[t])) continue;
+
+                        if (type != S_LAZY_SYMBOL_POINTERS) {
+                            uint64_t *gs = (uint64_t *)(base + k * 8);
+                            vxLogRaw([NSString stringWithFormat:@"GOT %s slot=%llx v=%llx",
+                                      nm, (uint64_t)gs, *gs]);
+                            got++;
+                            break;
+                        }
                         if (vxDone[t]) break;
 
                         void *d = dlsym(RTLD_DEFAULT, vxNames[t] + 1);
                         if (!vxOrig[t]) vxOrig[t] = (vxFn)d;
 
                         uint64_t *slot = (uint64_t *)(base + k * 8);
-                        if (type != S_LAZY_SYMBOL_POINTERS) {
-                            if (*slot != (uint64_t)d) {
-                                vxLogRaw([NSString stringWithFormat:
-                                          @"GOT %s slot=%llx dlsym=%llx firmado",
-                                          nm, (uint64_t)*slot, (uint64_t)d]);
-                                sig++;
-                                break;
-                            }
-                        }
                         vxProt((uint64_t)slot, 8);
                         *slot = (uint64_t)vxTab[t];
                         vxDone[t] = 1;
-                        vxLogRaw([NSString stringWithFormat:@"P %s %s slot=%llx",
-                                  nm, type == S_LAZY_SYMBOL_POINTERS ? "lazy" : "got",
-                                  (uint64_t)slot]);
+                        vxLogRaw([NSString stringWithFormat:@"P %s slot=%llx", nm, (uint64_t)slot]);
                         hits++;
                         break;
                     }
@@ -257,8 +251,7 @@ static uint32_t vxPatch(void) {
     }
 
     vxPatched += hits;
-    vxLogRaw([NSString stringWithFormat:@"pasada patch=%u firmados=%u total=%u",
-              hits, sig, vxPatched]);
+    vxLogRaw([NSString stringWithFormat:@"pasada patch=%u got=%u total=%u", hits, got, vxPatched]);
     return hits;
 }
 
@@ -289,10 +282,7 @@ static void vxRetry(void) {
 
 __attribute__((constructor))
 static void vxInit(void) {
-    vxT0 = vxNow() ? 0 : 0;
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    vxT0 = (uint64_t)ts.tv_sec * 1000ull + (uint64_t)ts.tv_nsec / 1000000ull;
-    vxLogRaw(@"==== 174 pasivo ret ====");
+    vxT0 = vxNow();
+    vxLogRaw(@"==== 175 pasivo ret ====");
     dispatch_async(dispatch_get_global_queue(0, 0), ^{ vxStep(); });
 }
