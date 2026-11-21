@@ -1,15 +1,14 @@
-// VEEX shell build 169 — lista limpia de imports del sistema
+// VEEX shell build 170 — imports exactos (símbolos indefinidos)
 
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <mach-o/dyld.h>
 #import <mach-o/loader.h>
+#import <mach-o/nlist.h>
 #include <string.h>
 #include <stdio.h>
-#include <ctype.h>
 
-#define VX_BUILD 169
-#define VX_CAP 400
+#define VX_BUILD 170
 
 static NSString *vxDoc(void) {
     return NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
@@ -23,22 +22,16 @@ static void vxLog(NSString *s) {
     fclose(f);
 }
 
-static const char *vxKey(const char *s) {
-    static const char *k[] = { "csops", "ptrace", "sysctl", "stat", "access", "open",
-                               "dlopen", "dlsym", "task_info", "vm_region", "proc_pidinfo",
-                               "kdebug", "getppid", "objc_sethook", "hook", "jailbreak",
-                               "fair", "guard", "check", NULL };
-    char b[220];
-    size_t n = strlen(s);
-    size_t m = n < sizeof(b) - 1 ? n : sizeof(b) - 1;
-    for (size_t i = 0; i < m; i++) b[i] = (char)tolower((unsigned char)s[i]);
-    b[m] = 0;
-    for (int i = 0; k[i]; i++) if (strstr(b, k[i])) return k[i];
-    return NULL;
-}
+static const char *vxNames[] = {
+    "_csops", "_csops_audittoken", "_ptrace", "_sysctl", "_sysctlbyname",
+    "_stat", "_stat$INODE64", "_lstat", "_access", "_open", "_dlopen", "_dlsym",
+    "_task_info", "_mach_vm_region", "_vm_region", "_vm_region_64",
+    "_proc_pidinfo", "_kdebug_trace", "_getppid", "_getpid",
+    "_objc_setHook_getClass", "_mach_port_deallocate", NULL
+};
 
 static void vxRun(void) {
-    vxLog(@"==== imports ====");
+    vxLog(@"==== imports exactos ====");
     const struct mach_header_64 *h = NULL;
     uint32_t n = _dyld_image_count();
     for (uint32_t i = 0; i < n; i++) {
@@ -61,23 +54,27 @@ static void vxRun(void) {
         lc = (const void *)((const char *)lc + lc->cmdsize);
     }
     if (!st || !leVm) { vxLog(@"sin tablas"); return; }
+    if (st->symoff < leOff || st->symoff >= leOff + leSize) { vxLog(@"symoff fuera"); return; }
     if (st->stroff < leOff || st->stroff >= leOff + leSize) { vxLog(@"stroff fuera"); return; }
 
     const uint8_t *le = (const uint8_t *)h + (leVm - txtVm);
+    const struct nlist_64 *nl = (const struct nlist_64 *)(le + (st->symoff - leOff));
     const char *str = (const char *)(le + (st->stroff - leOff));
 
-    uint32_t hits = 0;
-    for (uint32_t off = 0; off < st->strsize && hits < VX_CAP; off++) {
-        const char *s = str + off;
-        if (!*s) continue;
-        size_t len = strlen(s);
-        if (len >= 3 && len <= 200) {
-            const char *kw = vxKey(s);
-            if (kw) { vxLog([NSString stringWithFormat:@"[%s] %s", kw, s]); hits++; }
+    uint32_t und = 0, hit = 0;
+    for (uint32_t i = 0; i < st->nsyms; i++) {
+        if ((nl[i].n_type & N_TYPE) != N_UNDF) continue;
+        und++;
+        if (!nl[i].n_un.n_strx) continue;
+        const char *nm = str + nl[i].n_un.n_strx;
+        for (int k = 0; vxNames[k]; k++) {
+            if (strcmp(nm, vxNames[k])) continue;
+            vxLog([NSString stringWithFormat:@"I %s", nm]);
+            hit++;
+            break;
         }
-        off += len;
     }
-    vxLog([NSString stringWithFormat:@"hits=%u", hits]);
+    vxLog([NSString stringWithFormat:@"und=%u hit=%u nsyms=%u", und, hit, st->nsyms]);
 }
 
 __attribute__((constructor))
