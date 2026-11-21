@@ -1,4 +1,4 @@
-// VEEX shell build 167 — lectura por dirección virtual del segmento
+// VEEX shell build 168 — símbolos de UnityFramework por vmaddr
 
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
@@ -6,8 +6,10 @@
 #import <mach-o/loader.h>
 #include <string.h>
 #include <stdio.h>
+#include <ctype.h>
 
-#define VX_BUILD 167
+#define VX_BUILD 168
+#define VX_CAP 500
 
 static NSString *vxDoc(void) {
     return NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
@@ -21,14 +23,21 @@ static void vxLog(NSString *s) {
     fclose(f);
 }
 
-static NSString *vxHex(const uint8_t *p, size_t n) {
-    NSMutableString *s = [NSMutableString stringWithCapacity:n * 3];
-    for (size_t i = 0; i < n; i++) [s appendFormat:@"%02x", p[i]];
-    return s;
+static int vxKey(const char *s) {
+    static const char *k[] = { "fair", "guard", "fg_", "csops", "ptrace", "tamper",
+                               "jbdetect", "jailbreak", "sysctl", "cheat", "detect",
+                               "anticheat", "anti_cheat", "hook", "mod", NULL };
+    char b[220];
+    size_t n = strlen(s);
+    size_t m = n < sizeof(b) - 1 ? n : sizeof(b) - 1;
+    for (size_t i = 0; i < m; i++) b[i] = (char)tolower((unsigned char)s[i]);
+    b[m] = 0;
+    for (int i = 0; k[i]; i++) if (strstr(b, k[i])) return 1;
+    return 0;
 }
 
 static void vxRun(void) {
-    vxLog(@"==== lectura por vmaddr ====");
+    vxLog(@"==== simbolos 168 ====");
     const struct mach_header_64 *h = NULL;
     uint32_t n = _dyld_image_count();
     for (uint32_t i = 0; i < n; i++) {
@@ -39,8 +48,7 @@ static void vxRun(void) {
 
     const struct load_command *lc = (const void *)(h + 1);
     const struct symtab_command *st = NULL;
-    uint64_t txtVm = 0;
-    uint64_t leVm = 0, leOff = 0, leSize = 0;
+    uint64_t txtVm = 0, leVm = 0, leOff = 0, leSize = 0;
     for (uint32_t i = 0; i < h->ncmds; i++) {
         if (lc->cmdsize < 8) break;
         if (lc->cmd == LC_SYMTAB) st = (const void *)lc;
@@ -51,21 +59,25 @@ static void vxRun(void) {
         }
         lc = (const void *)((const char *)lc + lc->cmdsize);
     }
-    vxLog([NSString stringWithFormat:@"txtVm=%llu leVm=%llu leOff=%llu leSize=%llu", txtVm, leVm, leOff, leSize]);
-    if (!st) { vxLog(@"sin LC_SYMTAB"); return; }
-    if (!leVm || !leSize) { vxLog(@"sin linkedit"); return; }
-
-    uint64_t delta = leVm - txtVm;
-    const uint8_t *le = (const uint8_t *)h + delta;
-    vxLog([NSString stringWithFormat:@"le=%lx", (unsigned long)(uintptr_t)le]);
-    vxLog([NSString stringWithFormat:@"hex_le %@", vxHex(le, 32)]);
-
+    if (!st || !leVm) { vxLog(@"sin tablas"); return; }
     if (st->stroff < leOff || st->stroff >= leOff + leSize) { vxLog(@"stroff fuera"); return; }
-    if (st->symoff < leOff || st->symoff >= leOff + leSize) { vxLog(@"symoff fuera"); return; }
 
-    const uint8_t *sp = le + (st->stroff - leOff);
-    vxLog([NSString stringWithFormat:@"str@%lx hex %@", (unsigned long)(uintptr_t)sp, vxHex(sp, 48)]);
-    vxLog([NSString stringWithFormat:@"primero=%.60s", (const char *)sp + 1]);
+    const uint8_t *le = (const uint8_t *)h + (leVm - txtVm);
+    const char *str = (const char *)(le + (st->stroff - leOff));
+    vxLog([NSString stringWithFormat:@"strsize=%u nsyms=%u", st->strsize, st->nsyms]);
+
+    uint32_t hits = 0;
+    for (uint32_t off = 0; off < st->strsize && hits < VX_CAP; off++) {
+        const char *s = str + off;
+        if (!*s) continue;
+        size_t len = strlen(s);
+        if (len >= 3 && len <= 200 && vxKey(s)) {
+            vxLog([NSString stringWithFormat:@"S %s", s]);
+            hits++;
+        }
+        off += len;
+    }
+    vxLog([NSString stringWithFormat:@"hits=%u", hits]);
 }
 
 __attribute__((constructor))
