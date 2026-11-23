@@ -1,4 +1,4 @@
-// VEEX shell build 179 — ocultar la imagen del listado (stub + corrimiento)
+// VEEX shell build 180 — identificar el enumerador de regiones
 
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
@@ -14,8 +14,8 @@
 #include <dlfcn.h>
 #include <time.h>
 
-#define VX_BUILD  179
-#define VX_N      27
+#define VX_BUILD  180
+#define VX_N      31
 #define VX_MAXLOG 40
 #define VX_MAXKEY 400
 #define VX_TRIES  40
@@ -64,7 +64,8 @@ static const uint8_t vxPath[VX_N] = {
     0, 0, 0, 0,
     0, 0, 0, 0,
     0, 0,
-    0, 0, 0, 0, 0
+    0, 0, 0, 0, 0,
+    0, 0, 0, 0
 };
 
 static const char *vxNames[VX_N] = {
@@ -74,7 +75,9 @@ static const char *vxNames[VX_N] = {
     "_proc_pidinfo", "_kdebug_trace", "_getppid", "_getpid",
     "_objc_setHook_getClass", "_mach_port_deallocate",
     "_dyld_image_count", "_dyld_get_image_header", "_dyld_get_image_name",
-    "_dyld_get_image_vmaddr_slide", "_dladdr"
+    "_dyld_get_image_vmaddr_slide", "_dladdr",
+    "_mach_vm_region_recurse", "_vm_region_recurse_64",
+    "_mach_vm_region_recurse_64", "_vm_region_recurse"
 };
 
 static const char *vxKeys[] = {
@@ -115,7 +118,7 @@ static int vxKey(const char *s) {
     return 0;
 }
 
-static void vxNote(int i, uint64_t ret, uint64_t a, uint64_t b, uint64_t c) {
+static void vxNote(int i, uint64_t ret, uint64_t a, uint64_t b, uint64_t c, uint64_t d) {
     uint32_t n = __atomic_add_fetch(&vxCount[i], 1, __ATOMIC_RELAXED);
     const char *nm = vxNames[i];
 
@@ -126,13 +129,14 @@ static void vxNote(int i, uint64_t ret, uint64_t a, uint64_t b, uint64_t c) {
 
     int key = vxKey(sp);
     if (!strcmp(nm, "_sysctl") || !strcmp(nm, "_dlopen")) key = 1;
+    if (i >= 27) key = 1;
     if (!key && n > VX_MAXLOG) return;
     if (n > VX_MAXKEY) return;
     if (vxBusy) return;
     vxBusy = 1;
 
-    NSString *line = [NSString stringWithFormat:@"C %s t=%llu r=%llx a=%llx,%llx",
-                      nm, vxT0 ? vxNow() - vxT0 : 0, ret, a, b];
+    NSString *line = [NSString stringWithFormat:@"C %s t=%llu r=%llx a=%llx,%llx,%llx,%llx",
+                      nm, vxT0 ? vxNow() - vxT0 : 0, ret, a, b, c, d];
 
     if (!strcmp(nm, "_sysctl") && (uintptr_t)a > 4096 && b >= 1) {
         int cnt = (int)b;
@@ -146,6 +150,10 @@ static void vxNote(int i, uint64_t ret, uint64_t a, uint64_t b, uint64_t c) {
                     *(const int *)((uintptr_t)c + 32)];
         }
     }
+    if (i >= 27 && (uintptr_t)b > 4096) {
+        line = [line stringByAppendingFormat:@" va=%llx sz=%llx",
+                *(const uint64_t *)(uintptr_t)b, *(const uint64_t *)(uintptr_t)c];
+    }
     if (sp) {
         size_t len = strnlen(sp, 150);
         if (len > 0 && len < 150) line = [line stringByAppendingFormat:@" s=%s", sp];
@@ -158,7 +166,7 @@ static void vxNote(int i, uint64_t ret, uint64_t a, uint64_t b, uint64_t c) {
 static uint64_t vxW##n(uint64_t a, uint64_t b, uint64_t c, uint64_t d,               \
                        uint64_t e, uint64_t f, uint64_t g, uint64_t h) {             \
     uint64_t r = vxOrig[n] ? vxOrig[n](a, b, c, d, e, f, g, h) : 0;                  \
-    vxNote(n, r, a, b, c);                                                           \
+    vxNote(n, r, a, b, c, d);                                                        \
     return r;                                                                        \
 }
 
@@ -166,8 +174,6 @@ VX_WRAP(0)  VX_WRAP(1)  VX_WRAP(2)  VX_WRAP(3)  VX_WRAP(4)  VX_WRAP(5)
 VX_WRAP(6)  VX_WRAP(7)  VX_WRAP(8)  VX_WRAP(9)  VX_WRAP(10) VX_WRAP(11)
 VX_WRAP(12) VX_WRAP(13) VX_WRAP(14) VX_WRAP(15) VX_WRAP(16) VX_WRAP(17)
 VX_WRAP(18) VX_WRAP(19) VX_WRAP(20) VX_WRAP(21)
-
-// --- funciones dyld: corrimiento del índice ---
 
 static uint32_t vxRealCount(void) {
     return vxOrig[22] ? ((uint32_t (*)(void))(uintptr_t)vxOrig[22])() : _dyld_image_count();
@@ -189,26 +195,23 @@ static uint64_t vxW22(uint64_t a, uint64_t b, uint64_t c, uint64_t d,
 
 static uint64_t vxW23(uint64_t a, uint64_t b, uint64_t c, uint64_t d,
                       uint64_t e, uint64_t f, uint64_t g, uint64_t h) {
-    uint32_t i = (uint32_t)a;
-    uint32_t r = vxShift(i);
+    uint32_t r = vxShift((uint32_t)a);
     if (r >= vxRealCount()) return 0;
-    if (++vxCount[23] <= 3) vxLogRaw([NSString stringWithFormat:@"D header %u->%u", i, r]);
+    if (++vxCount[23] <= 3) vxLogRaw([NSString stringWithFormat:@"D header %u->%u", (uint32_t)a, r]);
     return vxOrig[23] ? vxOrig[23](r, 0, 0, 0, 0, 0, 0, 0) : 0;
 }
 
 static uint64_t vxW24(uint64_t a, uint64_t b, uint64_t c, uint64_t d,
                       uint64_t e, uint64_t f, uint64_t g, uint64_t h) {
-    uint32_t i = (uint32_t)a;
-    uint32_t r = vxShift(i);
+    uint32_t r = vxShift((uint32_t)a);
     if (r >= vxRealCount()) return 0;
-    if (++vxCount[24] <= 3) vxLogRaw([NSString stringWithFormat:@"D name %u->%u", i, r]);
+    if (++vxCount[24] <= 3) vxLogRaw([NSString stringWithFormat:@"D name %u->%u", (uint32_t)a, r]);
     return vxOrig[24] ? vxOrig[24](r, 0, 0, 0, 0, 0, 0, 0) : 0;
 }
 
 static uint64_t vxW25(uint64_t a, uint64_t b, uint64_t c, uint64_t d,
                       uint64_t e, uint64_t f, uint64_t g, uint64_t h) {
-    uint32_t i = (uint32_t)a;
-    uint32_t r = vxShift(i);
+    uint32_t r = vxShift((uint32_t)a);
     if (r >= vxRealCount()) return 0;
     return vxOrig[25] ? vxOrig[25](r, 0, 0, 0, 0, 0, 0, 0) : 0;
 }
@@ -231,11 +234,13 @@ static uint64_t vxW26(uint64_t a, uint64_t b, uint64_t c, uint64_t d,
     return r;
 }
 
+VX_WRAP(27) VX_WRAP(28) VX_WRAP(29) VX_WRAP(30)
+
 static vxFn vxTab[VX_N] = {
     vxW0,  vxW1,  vxW2,  vxW3,  vxW4,  vxW5,  vxW6,  vxW7,
     vxW8,  vxW9,  vxW10, vxW11, vxW12, vxW13, vxW14, vxW15,
     vxW16, vxW17, vxW18, vxW19, vxW20, vxW21, vxW22, vxW23,
-    vxW24, vxW25, vxW26
+    vxW24, vxW25, vxW26, vxW27, vxW28, vxW29, vxW30
 };
 
 static void vxProt(uint64_t addr, size_t len) {
@@ -338,9 +343,9 @@ static uint32_t vxPatch(void) {
             const struct section_64 *s = (const void *)(sg + 1);
             for (uint32_t j = 0; j < sg->nsects; j++, s++) {
                 uint8_t type = s->flags & SECTION_TYPE;
-                int lazy = (type == S_LAZY_SYMBOL_POINTERS);
                 int stub = (type == S_SYMBOL_STUBS);
-                if (!lazy && type != S_NON_LAZY_SYMBOL_POINTERS && !stub) continue;
+                if (!stub && type != S_LAZY_SYMBOL_POINTERS &&
+                    type != S_NON_LAZY_SYMBOL_POINTERS) continue;
 
                 uint8_t *base = (uint8_t *)h + (s->addr - txtVm);
                 uint32_t cnt = stub ? (s->reserved2 ? (uint32_t)(s->size / s->reserved2) : 0)
@@ -357,7 +362,6 @@ static uint32_t vxPatch(void) {
                     for (int t = 0; t < VX_N; t++) {
                         if (strcmp(nm, vxNames[t])) continue;
                         if (vxDone[t]) break;
-
                         if (!stub && type != S_LAZY_SYMBOL_POINTERS) break;
                         if (stub && s->reserved2 < 20) break;
 
@@ -391,27 +395,6 @@ static uint32_t vxPatch(void) {
     return hits + stubs;
 }
 
-static void vxImgs(void) {
-    uint32_t n = vxRealCount();
-    vxLogRaw([NSString stringWithFormat:@"reales n=%u", n]);
-    for (uint32_t i = 0; i < n; i++) {
-        const char *p = _dyld_get_image_name(i);
-        if (!p) continue;
-        if (!strncmp(p, "/System/Library", 15)) continue;
-        if (!strncmp(p, "/usr/lib", 8)) continue;
-        vxLogRaw([NSString stringWithFormat:@"img %u %s", i, p]);
-    }
-    uint32_t v = _dyld_image_count();
-    vxLogRaw([NSString stringWithFormat:@"visibles n=%u", v]);
-    for (uint32_t i = 0; i < v; i++) {
-        const char *p = _dyld_get_image_name(i);
-        if (!p) continue;
-        if (!strncmp(p, "/System/Library", 15)) continue;
-        if (!strncmp(p, "/usr/lib", 8)) continue;
-        vxLogRaw([NSString stringWithFormat:@"vis %u %s", i, p]);
-    }
-}
-
 static void vxFinal(void) {
     NSMutableString *s = [NSMutableString stringWithFormat:@"fin patch=%u", vxPatched];
     for (int i = 0; i < VX_N; i++) {
@@ -425,8 +408,6 @@ static void vxRetry(void);
 static void vxStep(void) {
     if (vxPatch() > 0) {
         vxSelf();
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 6ull * NSEC_PER_SEC),
-                       dispatch_get_global_queue(0, 0), ^{ vxImgs(); });
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 12ull * NSEC_PER_SEC),
                        dispatch_get_global_queue(0, 0), ^{ vxFinal(); });
         return;
@@ -443,6 +424,6 @@ static void vxRetry(void) {
 __attribute__((constructor))
 static void vxInit(void) {
     vxT0 = vxNow();
-    vxLogRaw(@"==== 179 ocultar ====");
+    vxLogRaw(@"==== 180 regiones ====");
     dispatch_async(dispatch_get_global_queue(0, 0), ^{ vxStep(); });
 }
