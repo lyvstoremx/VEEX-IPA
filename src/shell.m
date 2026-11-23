@@ -16,6 +16,8 @@
 #include <dlfcn.h>
 #include <time.h>
 
+extern const struct dyld_all_image_infos *_dyld_get_all_image_infos(void);
+
 #define VX_BUILD  184
 #define VX_N      28
 #define VX_MAXLOG 40
@@ -271,9 +273,6 @@ static void vxInfo(void) {
     }
     vxLogRaw(@"infos sin self");
 }
-
-static uint64_t vxW28(uint64_t a, uint64_t b, uint64_t c, uint64_t d,
-                      uint64_t e, uint64_t f, uint64_t g, uint64_t h);
 
 // --- parche ---
 
