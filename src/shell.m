@@ -1,4 +1,5 @@
 // VEEX shell build 184 — fuera del arreglo dyld_all_image_infos + filtro objc_copyImageNames
+// ed82b: _dyld_get_all_image_infos resuelto por dlsym + task_info (sin símbolo privado en el link)
 
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
@@ -7,6 +8,7 @@
 #import <mach-o/loader.h>
 #import <mach-o/nlist.h>
 #import <mach/mach.h>
+#import <mach/task_info.h>
 #include <libkern/OSCacheControl.h>
 #include <string.h>
 #include <stdio.h>
@@ -15,8 +17,6 @@
 #include <pthread.h>
 #include <dlfcn.h>
 #include <time.h>
-
-extern const struct dyld_all_image_infos *_dyld_get_all_image_infos(void);
 
 #define VX_BUILD  184
 #define VX_N      28
@@ -99,6 +99,30 @@ static void vxLogRaw(NSString *s) {
         fflush(vxF);
     }
     pthread_mutex_unlock(&vxM);
+}
+
+// --- dyld_all_image_infos sin símbolo privado ---
+
+typedef const struct dyld_all_image_infos *(*vxInfosFn)(void);
+
+static const struct dyld_all_image_infos *vxInfos(void) {
+    static vxInfosFn f = NULL;
+    static int t = 0;
+    if (!t) {
+        t = 1;
+        f = (vxInfosFn)dlsym(RTLD_DEFAULT, "_dyld_get_all_image_infos");
+        if (!f) f = (vxInfosFn)dlsym(RTLD_DEFAULT, "dyld_get_all_image_infos");
+    }
+    if (f) {
+        const struct dyld_all_image_infos *a = f();
+        if (a) return a;
+    }
+    struct task_dyld_info tdi;
+    mach_msg_type_number_t cnt = (mach_msg_type_number_t)(sizeof(tdi) / sizeof(natural_t));
+    if (task_info(mach_task_self(), TASK_DYLD_INFO, (task_info_t)&tdi, &cnt) == KERN_SUCCESS) {
+        if (tdi.all_image_info_addr) return (const void *)(uintptr_t)tdi.all_image_info_addr;
+    }
+    return NULL;
 }
 
 // ---------------- registro ----------------
@@ -249,8 +273,8 @@ static void vxSelf(void) {
 // --- fuera del arreglo crudo de dyld ---
 
 static void vxInfo(void) {
-    const struct dyld_all_image_infos *ai = _dyld_get_all_image_infos();
-    if (!ai) { vxLogRaw(@"sin infos"); return; }
+    const struct dyld_all_image_infos *ai = vxInfos();
+    if (!ai) { vxLogRaw(@"sin infos api"); return; }
     uint32_t n = ai->infoArrayCount;
     vxLogRaw([NSString stringWithFormat:@"infos n=%u", n]);
     if (!vxSelfLo) return;
@@ -366,7 +390,7 @@ static uint32_t vxPatch(void) {
 // --- volcado ---
 
 static void vxImgs(void) {
-    const struct dyld_all_image_infos *ai = _dyld_get_all_image_infos();
+    const struct dyld_all_image_infos *ai = vxInfos();
     if (ai) vxLogRaw([NSString stringWithFormat:@"infos ahora n=%u", ai->infoArrayCount]);
 
     uint32_t n = _dyld_image_count();
@@ -422,6 +446,7 @@ static void vxRetry(void) {
 __attribute__((constructor))
 static void vxInit(void) {
     vxT0 = vxNow();
+    (void)vxInfos();
     vxLogRaw(@"==== 184 ocultar infos ====");
     dispatch_async(dispatch_get_global_queue(0, 0), ^{ vxStep(); });
 }
