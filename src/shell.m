@@ -1,4 +1,4 @@
-// VEEX shell build 178 — p_flag y dladdr con mentira sobre nuestro rango
+// VEEX shell build 179 — ocultar la imagen del listado (stub + corrimiento)
 
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
@@ -6,6 +6,7 @@
 #import <mach-o/loader.h>
 #import <mach-o/nlist.h>
 #import <mach/mach.h>
+#include <libkern/OSCacheControl.h>
 #include <string.h>
 #include <stdio.h>
 #include <stdint.h>
@@ -13,12 +14,13 @@
 #include <dlfcn.h>
 #include <time.h>
 
-#define VX_BUILD  178
+#define VX_BUILD  179
 #define VX_N      27
 #define VX_MAXLOG 40
 #define VX_MAXKEY 400
 #define VX_TRIES  40
 #define VX_HIDE   1
+#define VX_SHIFT  1
 
 #ifndef SECTION_TYPE
 #define SECTION_TYPE 0xff
@@ -28,6 +30,9 @@
 #endif
 #ifndef S_NON_LAZY_SYMBOL_POINTERS
 #define S_NON_LAZY_SYMBOL_POINTERS 0x6
+#endif
+#ifndef S_SYMBOL_STUBS
+#define S_SYMBOL_STUBS 0x8
 #endif
 #ifndef INDIRECT_SYMBOL_LOCAL
 #define INDIRECT_SYMBOL_LOCAL 0x80000000
@@ -49,6 +54,7 @@ static uint32_t vxPatched = 0;
 static int      vxTries = 0;
 
 static uint64_t vxSelfLo = 0, vxSelfHi = 0;
+static uint32_t vxSelfIdx = 0;
 static const char *vxFake = "/usr/lib/libobjc.A.dylib";
 
 static const uint8_t vxPath[VX_N] = {
@@ -159,8 +165,53 @@ static uint64_t vxW##n(uint64_t a, uint64_t b, uint64_t c, uint64_t d,          
 VX_WRAP(0)  VX_WRAP(1)  VX_WRAP(2)  VX_WRAP(3)  VX_WRAP(4)  VX_WRAP(5)
 VX_WRAP(6)  VX_WRAP(7)  VX_WRAP(8)  VX_WRAP(9)  VX_WRAP(10) VX_WRAP(11)
 VX_WRAP(12) VX_WRAP(13) VX_WRAP(14) VX_WRAP(15) VX_WRAP(16) VX_WRAP(17)
-VX_WRAP(18) VX_WRAP(19) VX_WRAP(20) VX_WRAP(21) VX_WRAP(22) VX_WRAP(23)
-VX_WRAP(24) VX_WRAP(25)
+VX_WRAP(18) VX_WRAP(19) VX_WRAP(20) VX_WRAP(21)
+
+// --- funciones dyld: corrimiento del índice ---
+
+static uint32_t vxRealCount(void) {
+    return vxOrig[22] ? ((uint32_t (*)(void))(uintptr_t)vxOrig[22])() : _dyld_image_count();
+}
+
+static uint32_t vxShift(uint32_t i) {
+#if VX_SHIFT
+    if (vxSelfIdx && i >= vxSelfIdx) return i + 1;
+#endif
+    return i;
+}
+
+static uint64_t vxW22(uint64_t a, uint64_t b, uint64_t c, uint64_t d,
+                      uint64_t e, uint64_t f, uint64_t g, uint64_t h) {
+    uint32_t n = vxRealCount();
+    if (++vxCount[22] <= 3) vxLogRaw([NSString stringWithFormat:@"D count %u", n]);
+    return n ? n - 1 : 0;
+}
+
+static uint64_t vxW23(uint64_t a, uint64_t b, uint64_t c, uint64_t d,
+                      uint64_t e, uint64_t f, uint64_t g, uint64_t h) {
+    uint32_t i = (uint32_t)a;
+    uint32_t r = vxShift(i);
+    if (r >= vxRealCount()) return 0;
+    if (++vxCount[23] <= 3) vxLogRaw([NSString stringWithFormat:@"D header %u->%u", i, r]);
+    return vxOrig[23] ? vxOrig[23](r, 0, 0, 0, 0, 0, 0, 0) : 0;
+}
+
+static uint64_t vxW24(uint64_t a, uint64_t b, uint64_t c, uint64_t d,
+                      uint64_t e, uint64_t f, uint64_t g, uint64_t h) {
+    uint32_t i = (uint32_t)a;
+    uint32_t r = vxShift(i);
+    if (r >= vxRealCount()) return 0;
+    if (++vxCount[24] <= 3) vxLogRaw([NSString stringWithFormat:@"D name %u->%u", i, r]);
+    return vxOrig[24] ? vxOrig[24](r, 0, 0, 0, 0, 0, 0, 0) : 0;
+}
+
+static uint64_t vxW25(uint64_t a, uint64_t b, uint64_t c, uint64_t d,
+                      uint64_t e, uint64_t f, uint64_t g, uint64_t h) {
+    uint32_t i = (uint32_t)a;
+    uint32_t r = vxShift(i);
+    if (r >= vxRealCount()) return 0;
+    return vxOrig[25] ? vxOrig[25](r, 0, 0, 0, 0, 0, 0, 0) : 0;
+}
 
 static uint64_t vxW26(uint64_t a, uint64_t b, uint64_t c, uint64_t d,
                       uint64_t e, uint64_t f, uint64_t g, uint64_t h) {
@@ -195,8 +246,18 @@ static void vxProt(uint64_t addr, size_t len) {
                false, VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY);
 }
 
+static void vxStub(uint8_t *at, uint64_t dst) {
+    uint32_t *w = (uint32_t *)at;
+    w[0] = 0xD2800000u | ((uint32_t)(dst & 0xFFFF) << 5) | 16;
+    w[1] = 0xF2A00000u | ((uint32_t)((dst >> 16) & 0xFFFF) << 5) | 16;
+    w[2] = 0xF2C00000u | ((uint32_t)((dst >> 32) & 0xFFFF) << 5) | 16;
+    w[3] = 0xF2E00000u | ((uint32_t)((dst >> 48) & 0xFFFF) << 5) | 16;
+    w[4] = 0xD61F0200u;
+    sys_icache_invalidate(at, 20);
+}
+
 static const struct mach_header_64 *vxFind(void) {
-    for (uint32_t i = 0, n = _dyld_image_count(); i < n; i++) {
+    for (uint32_t i = 0, n = vxRealCount(); i < n; i++) {
         const char *p = _dyld_get_image_name(i);
         if (p && strstr(p, "UnityFramework")) return (const void *)_dyld_get_image_header(i);
     }
@@ -204,7 +265,7 @@ static const struct mach_header_64 *vxFind(void) {
 }
 
 static void vxSelf(void) {
-    for (uint32_t i = 0, n = _dyld_image_count(); i < n; i++) {
+    for (uint32_t i = 0, n = vxRealCount(); i < n; i++) {
         const char *p = _dyld_get_image_name(i);
         if (!p || !strstr(p, "libobjc.A.dylib")) continue;
         if (!strncmp(p, "/usr/lib", 8) || !strncmp(p, "/private/preboot", 16)) continue;
@@ -221,9 +282,10 @@ static void vxSelf(void) {
             }
             lc = (const void *)((const char *)lc + lc->cmdsize);
         }
+        vxSelfIdx = i;
         vxSelfLo = (uint64_t)h;
         vxSelfHi = (uint64_t)h + hi;
-        vxLogRaw([NSString stringWithFormat:@"self %u %llx-%llx %s", i, vxSelfLo, vxSelfHi, p]);
+        vxLogRaw([NSString stringWithFormat:@"self %u %llx-%llx", i, vxSelfLo, vxSelfHi]);
         return;
     }
     vxLogRaw(@"sin self");
@@ -266,7 +328,7 @@ static uint32_t vxPatch(void) {
     const char *str     = (const char *)(le + (st->stroff - leOff));
     const uint32_t *ind = (const uint32_t *)(le + (dys->indirectsymoff - leOff));
 
-    uint32_t hits = 0;
+    uint32_t hits = 0, stubs = 0;
     const struct load_command *sc = (const void *)(h + 1);
 
     for (uint32_t i = 0; i < h->ncmds; i++) {
@@ -276,11 +338,14 @@ static uint32_t vxPatch(void) {
             const struct section_64 *s = (const void *)(sg + 1);
             for (uint32_t j = 0; j < sg->nsects; j++, s++) {
                 uint8_t type = s->flags & SECTION_TYPE;
-                if (type != S_LAZY_SYMBOL_POINTERS &&
-                    type != S_NON_LAZY_SYMBOL_POINTERS) continue;
+                int lazy = (type == S_LAZY_SYMBOL_POINTERS);
+                int stub = (type == S_SYMBOL_STUBS);
+                if (!lazy && type != S_NON_LAZY_SYMBOL_POINTERS && !stub) continue;
 
                 uint8_t *base = (uint8_t *)h + (s->addr - txtVm);
-                uint32_t cnt  = (uint32_t)(s->size / 8);
+                uint32_t cnt = stub ? (s->reserved2 ? (uint32_t)(s->size / s->reserved2) : 0)
+                                    : (uint32_t)(s->size / 8);
+
                 for (uint32_t k = 0; k < cnt; k++) {
                     uint32_t si = s->reserved1 + k;
                     if (si >= dys->nindirectsyms) break;
@@ -291,17 +356,28 @@ static uint32_t vxPatch(void) {
 
                     for (int t = 0; t < VX_N; t++) {
                         if (strcmp(nm, vxNames[t])) continue;
-                        if (type != S_LAZY_SYMBOL_POINTERS) break;
                         if (vxDone[t]) break;
+
+                        if (!stub && type != S_LAZY_SYMBOL_POINTERS) break;
+                        if (stub && s->reserved2 < 20) break;
 
                         void *d = dlsym(RTLD_DEFAULT, vxNames[t] + 1);
                         if (!vxOrig[t]) vxOrig[t] = (vxFn)d;
 
-                        uint64_t *slot = (uint64_t *)(base + k * 8);
-                        vxProt((uint64_t)slot, 8);
-                        *slot = (uint64_t)vxTab[t];
+                        if (stub) {
+                            uint8_t *at = base + (uint64_t)k * s->reserved2;
+                            vxProt((uint64_t)at, 20);
+                            vxStub(at, (uint64_t)vxTab[t]);
+                            vxLogRaw([NSString stringWithFormat:@"S %s stub=%llx", nm, (uint64_t)at]);
+                            stubs++;
+                        } else {
+                            uint64_t *slot = (uint64_t *)(base + (uint64_t)k * 8);
+                            vxProt((uint64_t)slot, 8);
+                            *slot = (uint64_t)vxTab[t];
+                            vxLogRaw([NSString stringWithFormat:@"P %s slot=%llx", nm, (uint64_t)slot]);
+                            hits++;
+                        }
                         vxDone[t] = 1;
-                        hits++;
                         break;
                     }
                 }
@@ -310,20 +386,29 @@ static uint32_t vxPatch(void) {
         sc = (const void *)((const char *)sc + sc->cmdsize);
     }
 
-    vxPatched += hits;
-    vxLogRaw([NSString stringWithFormat:@"pasada patch=%u total=%u", hits, vxPatched]);
-    return hits;
+    vxPatched += hits + stubs;
+    vxLogRaw([NSString stringWithFormat:@"pasada slot=%u stub=%u total=%u", hits, stubs, vxPatched]);
+    return hits + stubs;
 }
 
 static void vxImgs(void) {
-    uint32_t n = _dyld_image_count();
-    vxLogRaw([NSString stringWithFormat:@"imgs n=%u", n]);
+    uint32_t n = vxRealCount();
+    vxLogRaw([NSString stringWithFormat:@"reales n=%u", n]);
     for (uint32_t i = 0; i < n; i++) {
         const char *p = _dyld_get_image_name(i);
         if (!p) continue;
         if (!strncmp(p, "/System/Library", 15)) continue;
         if (!strncmp(p, "/usr/lib", 8)) continue;
         vxLogRaw([NSString stringWithFormat:@"img %u %s", i, p]);
+    }
+    uint32_t v = _dyld_image_count();
+    vxLogRaw([NSString stringWithFormat:@"visibles n=%u", v]);
+    for (uint32_t i = 0; i < v; i++) {
+        const char *p = _dyld_get_image_name(i);
+        if (!p) continue;
+        if (!strncmp(p, "/System/Library", 15)) continue;
+        if (!strncmp(p, "/usr/lib", 8)) continue;
+        vxLogRaw([NSString stringWithFormat:@"vis %u %s", i, p]);
     }
 }
 
@@ -358,6 +443,6 @@ static void vxRetry(void) {
 __attribute__((constructor))
 static void vxInit(void) {
     vxT0 = vxNow();
-    vxLogRaw(@"==== 178 dladdr ====");
+    vxLogRaw(@"==== 179 ocultar ====");
     dispatch_async(dispatch_get_global_queue(0, 0), ^{ vxStep(); });
 }
