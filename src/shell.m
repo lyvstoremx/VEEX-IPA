@@ -1,4 +1,4 @@
-// VEEX shell build 193 — identificación por dladdr, sin tablas
+// VEEX shell build 194 — sonda: dladdr, bytes crudos, valores de slot
 
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
@@ -18,7 +18,7 @@
 #include <dlfcn.h>
 #include <time.h>
 
-#define VX_BUILD  193
+#define VX_BUILD  194
 #define VX_N      28
 #define VX_MAXLOG 40
 #define VX_TRIES  40
@@ -323,8 +323,6 @@ static void vxInfo(void) {
     vxLogRaw([NSString stringWithFormat:@"infos n=%u idx=%u", ai->infoArrayCount, vxIdx()]);
 }
 
-// --- decodificar stub: adrp x16 / ldr x16 / -> slot ---
-
 static uint64_t vxStubSlot(uint8_t *sp, uint64_t lo, uint64_t hi) {
     uint32_t i0 = *(const uint32_t *)sp;
     uint32_t i1 = *(const uint32_t *)(sp + 4);
@@ -351,18 +349,10 @@ static int vxMatch(const char *sn) {
     return -1;
 }
 
-static const char *vxSymOf(uint64_t fn) {
-    if (!fn || !vxDladdr) return NULL;
-    Dl_info di;
-    if (!vxDladdr((const void *)fn, &di)) return NULL;
-    return di.dli_sname;
-}
-
-// --- parche ---
-
 static uint32_t vxPatch(void) {
     vxLogRaw(@"patch ini");
     if (!vxDladdr) vxDladdr = dlsym(RTLD_DEFAULT, "dladdr");
+    vxLogRaw([NSString stringWithFormat:@"dl=%d", vxDladdr ? 1 : 0]);
     const struct mach_header_64 *h = vxFind();
     if (!h) { vxLogRaw(@"sin unity"); return 0; }
     vxLogRaw([NSString stringWithFormat:@"h=%llx", (uint64_t)h]);
@@ -382,9 +372,8 @@ static uint32_t vxPatch(void) {
 
     uint64_t vbase = (uint64_t)h - txtVm;
     uint64_t lo = vbase, hi = vbase + span;
-    vxLogRaw([NSString stringWithFormat:@"rango %llx-%llx", lo, hi]);
 
-    uint32_t hits = 0, stubs = 0, nulo = 0;
+    uint32_t hits = 0, stubs = 0, malo = 0, noname = 0, nulo = 0;
     const struct load_command *c2 = (const void *)(h + 1);
     for (uint32_t i = 0; i < h->ncmds; i++) {
         if (c2->cmdsize < 8) break;
@@ -398,26 +387,37 @@ static uint32_t vxPatch(void) {
                     uint32_t stride = (ty == S_SYMBOL_STUBS) ? sc->reserved2 : 8;
                     if (stride >= 8 && stride <= 32) {
                         uint32_t wr = (stride < 16) ? stride : 16;
-                        vxLogRaw([NSString stringWithFormat:@"sec %s ty=%x n=%llu%s",
+                        uint64_t sa = vbase + sc->addr;
+                        vxLogRaw([NSString stringWithFormat:@"sec %s ty=%x n=%llu%s at=%llx-%llx",
                                   sc->sectname, ty, (uint64_t)(sc->size / stride),
-                                  auth ? " auth" : ""]);
-                        uint32_t bad = 0;
+                                  auth ? " auth" : "", sa, sa + sc->size]);
                         for (uint32_t k = 0; k < sc->size / stride; k++) {
                             uint8_t *sp = (uint8_t *)(vbase + sc->addr + (uint64_t)k * stride);
                             uint64_t slot;
                             if (ty == S_SYMBOL_STUBS) {
+                                if (k < 3) vxLogRaw([NSString stringWithFormat:@"raw %x %x %x",
+                                                     *(const uint32_t *)sp,
+                                                     *(const uint32_t *)(sp + 4),
+                                                     *(const uint32_t *)(sp + 8)]);
                                 slot = vxStubSlot(sp, lo, hi);
-                                if (!slot) { bad++; continue; }
+                                if (!slot) { malo++; continue; }
                             } else {
                                 slot = (uint64_t)sp;
-                                if (slot < lo || slot + 8 > hi) { bad++; continue; }
+                                if (slot < lo || slot + 8 > hi) { malo++; continue; }
                             }
                             uint64_t fn = VX_STRIP(*(const uint64_t *)slot);
                             if (!fn) { nulo++; continue; }
-                            int t = vxMatch(vxSymOf(fn));
-                            if (t < 0) continue;
+                            const char *sn = NULL;
+                            if (vxDladdr) {
+                                Dl_info di;
+                                if (vxDladdr((const void *)fn, &di)) sn = di.dli_sname;
+                            }
+                            if (ty == S_LAZY_SYMBOL_POINTERS && k < 5)
+                                vxLogRaw([NSString stringWithFormat:@"v %llx %s", fn, sn ? sn : "-"]);
+                            int t = vxMatch(sn);
+                            if (t < 0) { if (!sn) noname++; continue; }
                             kern_return_t kp = vxProt((uint64_t)sp, wr);
-                            if (kp != KERN_SUCCESS) { bad++; continue; }
+                            if (kp != KERN_SUCCESS) { malo++; continue; }
                             if (ty == S_SYMBOL_STUBS) {
                                 uint64_t w = (uint64_t)vxTab[t];
                                 uint32_t ins[4];
@@ -438,7 +438,6 @@ static uint32_t vxPatch(void) {
                             }
                             vxDone[t] = 1;
                         }
-                        if (bad) vxLogRaw([NSString stringWithFormat:@"malos %u", bad]);
                     }
                 }
                 sc = (const void *)((const char *)sc + sizeof(*sc));
@@ -448,8 +447,8 @@ static uint32_t vxPatch(void) {
     }
 
     vxPatched += hits + stubs;
-    vxLogRaw([NSString stringWithFormat:@"pasada slot=%u stub=%u nulo=%u total=%u",
-              hits, stubs, nulo, vxPatched]);
+    vxLogRaw([NSString stringWithFormat:@"pasada slot=%u stub=%u malo=%u noname=%u nulo=%u",
+              hits, stubs, malo, noname, nulo]);
     return hits + stubs;
 }
 
@@ -488,9 +487,9 @@ static void vxFinal(void) {
 static void vxRetry(void);
 
 static void vxStep(void) {
-    vxLogRaw([NSString stringWithFormat:@"step %d", vxTries]);
+    if (vxTries < 3) vxLogRaw([NSString stringWithFormat:@"step %d", vxTries]);
     uint32_t p = vxPatch();
-    vxLogRaw([NSString stringWithFormat:@"ret %u", p]);
+    if (vxTries < 3) vxLogRaw([NSString stringWithFormat:@"ret %u", p]);
     if (p > 0) {
         vxSelf();
         vxInfo();
@@ -512,6 +511,6 @@ static void vxRetry(void) {
 __attribute__((constructor))
 static void vxInit(void) {
     vxT0 = vxNow();
-    vxLogRaw(@"==== 193 dladdr ====");
+    vxLogRaw(@"==== 194 sonda ====");
     dispatch_async(dispatch_get_global_queue(0, 0), ^{ vxStep(); });
 }
