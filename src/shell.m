@@ -1,4 +1,4 @@
-// VEEX shell build 190 — prot con EXECUTE y escritura a stride
+// VEEX shell build 191 — tablas validadas, índices acotados
 
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
@@ -18,7 +18,7 @@
 #include <dlfcn.h>
 #include <time.h>
 
-#define VX_BUILD  190
+#define VX_BUILD  191
 #define VX_N      28
 #define VX_MAXLOG 40
 #define VX_TRIES  40
@@ -100,8 +100,6 @@ static void vxLogRaw(NSString *s) {
     pthread_mutex_unlock(&vxM);
 }
 
-// --- dyld_all_image_infos sin símbolo privado ---
-
 typedef const struct dyld_all_image_infos *(*vxInfosFn)(void);
 
 static const struct dyld_all_image_infos *vxInfos(void) {
@@ -123,8 +121,6 @@ static const struct dyld_all_image_infos *vxInfos(void) {
     }
     return NULL;
 }
-
-// ---------------- registro ----------------
 
 static void vxNote(int i, uint64_t a, uint64_t b, uint64_t c, uint64_t d) {
     uint32_t n = __atomic_add_fetch(&vxCount[i], 1, __ATOMIC_RELAXED);
@@ -266,7 +262,6 @@ static vxFn vxTab[VX_N] = {
     vxW24, vxW25, vxW26, vxW27
 };
 
-// R + W + X + COPY: sin la X la página deja de ejecutarse
 static kern_return_t vxProt(uint64_t addr, size_t len) {
     vm_size_t ps = vm_page_size;
     uintptr_t a = (uintptr_t)addr & ~((uintptr_t)ps - 1);
@@ -334,7 +329,7 @@ static uint32_t vxPatch(void) {
     const struct load_command *lc = (const void *)(h + 1);
     const struct symtab_command *st = NULL;
     const struct dysymtab_command *dys = NULL;
-    uint64_t txtVm = 0, leVm = 0;
+    uint64_t txtVm = 0, leVm = 0, leSize = 0;
     int haveText = 0;
 
     for (uint32_t i = 0; i < h->ncmds; i++) {
@@ -344,11 +339,25 @@ static uint32_t vxPatch(void) {
         if (lc->cmd == LC_SEGMENT_64) {
             const struct segment_command_64 *sg = (const void *)lc;
             if (!strcmp(sg->segname, "__TEXT")) { txtVm = sg->vmaddr; haveText = 1; }
-            if (!strcmp(sg->segname, "__LINKEDIT")) { leVm = sg->vmaddr; }
+            if (!strcmp(sg->segname, "__LINKEDIT")) { leVm = sg->vmaddr; leSize = sg->vmsize; }
         }
         lc = (const void *)((const char *)lc + lc->cmdsize);
     }
-    if (!st || !dys || !haveText) { vxLogRaw(@"tablas mal"); return 0; }
+    if (!st || !dys || !haveText || !leSize) { vxLogRaw(@"tablas mal"); return 0; }
+
+    vxLogRaw([NSString stringWithFormat:@"t sym=%u ns=%u stro=%u strsz=%u ind=%u nind=%u le=%llu",
+              st->symoff, st->nsyms, st->stroff, st->strsize,
+              dys->indirectsymoff, dys->nindirectsyms, leSize]);
+
+    if (!st->symoff || !st->stroff || !st->nsyms || !st->strsize ||
+        !dys->indirectsymoff || !dys->nindirectsyms) { vxLogRaw(@"tablas vacias"); return 0; }
+    if ((uint64_t)st->symoff + (uint64_t)st->nsyms * sizeof(struct nlist_64) > leSize) {
+        vxLogRaw(@"sym fuera"); return 0;
+    }
+    if ((uint64_t)st->stroff + (uint64_t)st->strsize > leSize) { vxLogRaw(@"str fuera"); return 0; }
+    if ((uint64_t)dys->indirectsymoff + (uint64_t)dys->nindirectsyms * 4 > leSize) {
+        vxLogRaw(@"ind fuera"); return 0;
+    }
     vxLogRaw(@"tablas ok");
 
     uint64_t vbase = (uint64_t)h - txtVm;
@@ -368,14 +377,21 @@ static uint32_t vxPatch(void) {
                 uint32_t ty = sc->flags & SECTION_TYPE;
                 if (ty == S_LAZY_SYMBOL_POINTERS || ty == S_SYMBOL_STUBS) {
                     uint32_t stride = (ty == S_SYMBOL_STUBS) ? sc->reserved2 : 8;
-                    if (stride && sc->size) {
+                    if (stride >= 8 && stride <= 32 && sc->size) {
                         uint32_t wr = (stride < 16) ? stride : 16;
-                        vxLogRaw([NSString stringWithFormat:@"sec %s ty=%x n=%llu st=%u wr=%u",
-                                  sc->sectname, ty, (uint64_t)(sc->size / stride), stride, wr]);
+                        vxLogRaw([NSString stringWithFormat:@"sec %s ty=%x n=%llu st=%u wr=%u r1=%u",
+                                  sc->sectname, ty, (uint64_t)(sc->size / stride), stride, wr,
+                                  sc->reserved1]);
+                        uint32_t bad = 0;
                         for (uint32_t k = 0; k < sc->size / stride; k++) {
-                            uint32_t si = ind[sc->reserved1 + k];
+                            uint64_t ii = (uint64_t)sc->reserved1 + k;
+                            if (ii >= dys->nindirectsyms) { bad++; continue; }
+                            uint32_t si = ind[ii];
                             if (si & (INDIRECT_SYMBOL_LOCAL | INDIRECT_SYMBOL_ABS)) continue;
-                            const char *nm = str + nl[si].n_un.n_strx;
+                            if (si >= st->nsyms) { bad++; continue; }
+                            uint32_t sx = nl[si].n_un.n_strx;
+                            if (!sx || sx >= st->strsize) { bad++; continue; }
+                            const char *nm = str + sx;
                             for (int t = 0; t < VX_N; t++) {
                                 if (vxDone[t] || strcmp(nm, vxNames[t])) continue;
                                 if (ty == S_SYMBOL_STUBS) {
@@ -409,6 +425,7 @@ static uint32_t vxPatch(void) {
                                 break;
                             }
                         }
+                        if (bad) vxLogRaw([NSString stringWithFormat:@"malos %u", bad]);
                     }
                 }
                 sc = (const void *)((const char *)sc + sizeof(*sc));
@@ -481,6 +498,6 @@ static void vxRetry(void) {
 __attribute__((constructor))
 static void vxInit(void) {
     vxT0 = vxNow();
-    vxLogRaw(@"==== 190 prot exec ====");
+    vxLogRaw(@"==== 191 validado ====");
     dispatch_async(dispatch_get_global_queue(0, 0), ^{ vxStep(); });
 }
