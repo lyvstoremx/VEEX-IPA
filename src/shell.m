@@ -1,4 +1,4 @@
-// VEEX shell build 191 — tablas validadas, índices acotados
+// VEEX shell build 192 — offsets de archivo directos sobre vbase
 
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
@@ -18,7 +18,7 @@
 #include <dlfcn.h>
 #include <time.h>
 
-#define VX_BUILD  191
+#define VX_BUILD  192
 #define VX_N      28
 #define VX_MAXLOG 40
 #define VX_TRIES  40
@@ -329,7 +329,7 @@ static uint32_t vxPatch(void) {
     const struct load_command *lc = (const void *)(h + 1);
     const struct symtab_command *st = NULL;
     const struct dysymtab_command *dys = NULL;
-    uint64_t txtVm = 0, leVm = 0, leSize = 0;
+    uint64_t txtVm = 0, span = 0;
     int haveText = 0;
 
     for (uint32_t i = 0; i < h->ncmds; i++) {
@@ -339,32 +339,31 @@ static uint32_t vxPatch(void) {
         if (lc->cmd == LC_SEGMENT_64) {
             const struct segment_command_64 *sg = (const void *)lc;
             if (!strcmp(sg->segname, "__TEXT")) { txtVm = sg->vmaddr; haveText = 1; }
-            if (!strcmp(sg->segname, "__LINKEDIT")) { leVm = sg->vmaddr; leSize = sg->vmsize; }
+            if (sg->vmaddr + sg->vmsize > span) span = sg->vmaddr + sg->vmsize;
         }
         lc = (const void *)((const char *)lc + lc->cmdsize);
     }
-    if (!st || !dys || !haveText || !leSize) { vxLogRaw(@"tablas mal"); return 0; }
+    if (!st || !dys || !haveText || !span) { vxLogRaw(@"tablas mal"); return 0; }
 
-    vxLogRaw([NSString stringWithFormat:@"t sym=%u ns=%u stro=%u strsz=%u ind=%u nind=%u le=%llu",
+    vxLogRaw([NSString stringWithFormat:@"t sym=%u ns=%u stro=%u strsz=%u ind=%u nind=%u span=%llu",
               st->symoff, st->nsyms, st->stroff, st->strsize,
-              dys->indirectsymoff, dys->nindirectsyms, leSize]);
+              dys->indirectsymoff, dys->nindirectsyms, span]);
 
     if (!st->symoff || !st->stroff || !st->nsyms || !st->strsize ||
         !dys->indirectsymoff || !dys->nindirectsyms) { vxLogRaw(@"tablas vacias"); return 0; }
-    if ((uint64_t)st->symoff + (uint64_t)st->nsyms * sizeof(struct nlist_64) > leSize) {
+    if ((uint64_t)st->symoff + (uint64_t)st->nsyms * sizeof(struct nlist_64) > span) {
         vxLogRaw(@"sym fuera"); return 0;
     }
-    if ((uint64_t)st->stroff + (uint64_t)st->strsize > leSize) { vxLogRaw(@"str fuera"); return 0; }
-    if ((uint64_t)dys->indirectsymoff + (uint64_t)dys->nindirectsyms * 4 > leSize) {
+    if ((uint64_t)st->stroff + (uint64_t)st->strsize > span) { vxLogRaw(@"str fuera"); return 0; }
+    if ((uint64_t)dys->indirectsymoff + (uint64_t)dys->nindirectsyms * 4 > span) {
         vxLogRaw(@"ind fuera"); return 0;
     }
     vxLogRaw(@"tablas ok");
 
     uint64_t vbase = (uint64_t)h - txtVm;
-    uint64_t lbase = vbase + leVm;
-    const struct nlist_64 *nl = (const void *)(lbase + st->symoff);
-    const char *str = (const void *)(lbase + st->stroff);
-    const uint32_t *ind = (const void *)(lbase + dys->indirectsymoff);
+    const struct nlist_64 *nl = (const void *)(vbase + st->symoff);
+    const char *str = (const void *)(vbase + st->stroff);
+    const uint32_t *ind = (const void *)(vbase + dys->indirectsymoff);
 
     uint32_t hits = 0, stubs = 0;
     const struct load_command *c2 = (const void *)(h + 1);
@@ -498,6 +497,6 @@ static void vxRetry(void) {
 __attribute__((constructor))
 static void vxInit(void) {
     vxT0 = vxNow();
-    vxLogRaw(@"==== 191 validado ====");
+    vxLogRaw(@"==== 192 offsets directos ====");
     dispatch_async(dispatch_get_global_queue(0, 0), ^{ vxStep(); });
 }
