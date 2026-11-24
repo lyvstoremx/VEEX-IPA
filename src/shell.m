@@ -1,4 +1,4 @@
-// VEEX shell build 196 — todas las imágenes, slots validados por segmento
+// VEEX shell build 197 — contención por segmento, no por rango global
 
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
@@ -18,7 +18,7 @@
 #include <dlfcn.h>
 #include <time.h>
 
-#define VX_BUILD  196
+#define VX_BUILD  197
 #define VX_N      28
 #define VX_MAXLOG 40
 #define VX_TRIES  40
@@ -316,7 +316,7 @@ static void vxInfo(void) {
     vxLogRaw([NSString stringWithFormat:@"infos n=%u idx=%u", ai->infoArrayCount, vxIdx()]);
 }
 
-static uint64_t vxStubSlot(uint8_t *sp, uint64_t lo, uint64_t hi) {
+static uint64_t vxStubSlot(uint8_t *sp) {
     uint32_t i0 = *(const uint32_t *)sp;
     uint32_t i1 = *(const uint32_t *)(sp + 4);
     if ((i0 & 0x9F00001Fu) != 0x90000010u) return 0;
@@ -326,9 +326,15 @@ static uint64_t vxStubSlot(uint8_t *sp, uint64_t lo, uint64_t hi) {
     uint64_t page = ((uint64_t)sp & ~0xFFFull) + (uint64_t)(imm << 12);
     uint64_t off = (uint64_t)((i1 >> 10) & 0xFFFu) * 8;
     uint64_t slot = page + off;
-    if (slot < lo || slot + 8 > hi) return 0;
     if (slot & 7) return 0;
     return slot;
+}
+
+static int vxIn(uint64_t s, const uint64_t *lo, const uint64_t *hi, int n) {
+    for (int i = 0; i < n; i++) {
+        if (s >= lo[i] && s + 8 <= hi[i]) return 1;
+    }
+    return 0;
 }
 
 static int vxByAddr(uint64_t fn) {
@@ -373,12 +379,7 @@ static uint32_t vxImg(const struct mach_header_64 *h, const char *nm) {
     if (!dn) return 0;
 
     uint64_t vbase = (uint64_t)h - txtVm;
-    uint64_t lo = 0, hi = 0;
-    for (int i = 0; i < dn; i++) {
-        if (!lo || dlo[i] < lo) lo = dlo[i];
-        if (dhi[i] > hi) hi = dhi[i];
-    }
-    lo += vbase; hi += vbase;
+    for (int i = 0; i < dn; i++) { dlo[i] += vbase; dhi[i] += vbase; }
 
     uint32_t hits = 0, stubs = 0, malo = 0, fuera = 0, nulo = 0, vistos = 0;
     const struct load_command *c2 = (const void *)(h + 1);
@@ -398,12 +399,12 @@ static uint32_t vxImg(const struct mach_header_64 *h, const char *nm) {
                             uint8_t *sp = (uint8_t *)(vbase + sc->addr + (uint64_t)k * stride);
                             uint64_t slot;
                             if (ty == S_SYMBOL_STUBS) {
-                                slot = vxStubSlot(sp, lo, hi);
+                                slot = vxStubSlot(sp);
                                 if (!slot) { malo++; continue; }
                             } else {
                                 slot = (uint64_t)sp;
                             }
-                            if (slot < lo || slot + 8 > hi) { fuera++; continue; }
+                            if (!vxIn(slot, dlo, dhi, dn)) { fuera++; continue; }
                             uint64_t fn = VX_STRIP(*(const uint64_t *)slot);
                             if (!fn) { nulo++; continue; }
                             int t = vxByAddr(fn);
@@ -415,7 +416,7 @@ static uint32_t vxImg(const struct mach_header_64 *h, const char *nm) {
                                 }
                                 t = vxByName(sn);
                                 if (t < 0) {
-                                    if (vistos < 6) {
+                                    if (vistos < 10) {
                                         vistos++;
                                         vxLogRaw([NSString stringWithFormat:@"t %llx %s", fn, sn ? sn : "-"]);
                                     }
@@ -450,9 +451,9 @@ static uint32_t vxImg(const struct mach_header_64 *h, const char *nm) {
         }
         c2 = (const void *)((const char *)c2 + c2->cmdsize);
     }
-    if (hits || stubs)
-        vxLogRaw([NSString stringWithFormat:@"img %s P=%u S=%u malo=%u fuera=%u",
-                  nm ? nm : "?", hits, stubs, malo, fuera]);
+    if (hits || stubs || malo || fuera)
+        vxLogRaw([NSString stringWithFormat:@"img %s P=%u S=%u malo=%u fuera=%u nulo=%u",
+                  nm ? nm : "?", hits, stubs, malo, fuera, nulo]);
     return hits + stubs;
 }
 
@@ -540,6 +541,6 @@ static void vxRetry(void) {
 __attribute__((constructor))
 static void vxInit(void) {
     vxT0 = vxNow();
-    vxLogRaw(@"==== 196 todas ====");
+    vxLogRaw(@"==== 197 segmento ====");
     dispatch_async(dispatch_get_global_queue(0, 0), ^{ vxStep(); });
 }
