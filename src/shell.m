@@ -1,4 +1,4 @@
-// VEEX shell build 194 — sonda: dladdr, bytes crudos, valores de slot
+// VEEX shell build 195 — ldr corregido + identificación por dirección
 
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
@@ -18,7 +18,7 @@
 #include <dlfcn.h>
 #include <time.h>
 
-#define VX_BUILD  194
+#define VX_BUILD  195
 #define VX_N      28
 #define VX_MAXLOG 40
 #define VX_TRIES  40
@@ -53,6 +53,7 @@ static uint64_t vxT0 = 0;
 static vxFn     vxOrig[VX_N];
 static uint32_t vxCount[VX_N];
 static int      vxDone[VX_N];
+static uint64_t vxAddr[VX_N];
 static uint32_t vxPatched = 0;
 static int      vxTries = 0;
 
@@ -323,11 +324,12 @@ static void vxInfo(void) {
     vxLogRaw([NSString stringWithFormat:@"infos n=%u idx=%u", ai->infoArrayCount, vxIdx()]);
 }
 
+// adrp x16 / ldr x16,[x16,#off] / br x16
 static uint64_t vxStubSlot(uint8_t *sp, uint64_t lo, uint64_t hi) {
     uint32_t i0 = *(const uint32_t *)sp;
     uint32_t i1 = *(const uint32_t *)(sp + 4);
     if ((i0 & 0x9F00001Fu) != 0x90000010u) return 0;
-    if ((i1 & 0xFFC0001Fu) != 0xF9400210u) return 0;
+    if ((i1 & 0xFFC003FFu) != 0xF9400210u) return 0;
     int64_t imm = (int64_t)((((i0 >> 5) & 0x7FFFFu) << 2) | ((i0 >> 29) & 3u));
     if (imm & 0x100000) imm -= 0x200000;
     uint64_t page = ((uint64_t)sp & ~0xFFFull) + (uint64_t)(imm << 12);
@@ -338,7 +340,14 @@ static uint64_t vxStubSlot(uint8_t *sp, uint64_t lo, uint64_t hi) {
     return slot;
 }
 
-static int vxMatch(const char *sn) {
+static int vxByAddr(uint64_t fn) {
+    for (int t = 0; t < VX_N; t++) {
+        if (!vxDone[t] && vxAddr[t] && vxAddr[t] == fn) return t;
+    }
+    return -1;
+}
+
+static int vxByName(const char *sn) {
     if (!sn) return -1;
     for (int t = 0; t < VX_N; t++) {
         if (vxDone[t]) continue;
@@ -352,7 +361,6 @@ static int vxMatch(const char *sn) {
 static uint32_t vxPatch(void) {
     vxLogRaw(@"patch ini");
     if (!vxDladdr) vxDladdr = dlsym(RTLD_DEFAULT, "dladdr");
-    vxLogRaw([NSString stringWithFormat:@"dl=%d", vxDladdr ? 1 : 0]);
     const struct mach_header_64 *h = vxFind();
     if (!h) { vxLogRaw(@"sin unity"); return 0; }
     vxLogRaw([NSString stringWithFormat:@"h=%llx", (uint64_t)h]);
@@ -371,7 +379,14 @@ static uint32_t vxPatch(void) {
     if (!span) { vxLogRaw(@"sin span"); return 0; }
 
     uint64_t vbase = (uint64_t)h - txtVm;
-    uint64_t lo = vbase, hi = vbase + span;
+    uint64_t lo = vbase, hi = vbase + span + 0x10000;
+
+    int con = 0;
+    for (int t = 0; t < VX_N; t++) {
+        if (!vxAddr[t]) vxAddr[t] = (uint64_t)dlsym(RTLD_DEFAULT, vxNames[t] + 1);
+        if (vxAddr[t]) con++;
+    }
+    vxLogRaw([NSString stringWithFormat:@"dir %d/%d", con, VX_N]);
 
     uint32_t hits = 0, stubs = 0, malo = 0, noname = 0, nulo = 0;
     const struct load_command *c2 = (const void *)(h + 1);
@@ -387,35 +402,29 @@ static uint32_t vxPatch(void) {
                     uint32_t stride = (ty == S_SYMBOL_STUBS) ? sc->reserved2 : 8;
                     if (stride >= 8 && stride <= 32) {
                         uint32_t wr = (stride < 16) ? stride : 16;
-                        uint64_t sa = vbase + sc->addr;
-                        vxLogRaw([NSString stringWithFormat:@"sec %s ty=%x n=%llu%s at=%llx-%llx",
-                                  sc->sectname, ty, (uint64_t)(sc->size / stride),
-                                  auth ? " auth" : "", sa, sa + sc->size]);
+                        uint32_t f = 0;
                         for (uint32_t k = 0; k < sc->size / stride; k++) {
                             uint8_t *sp = (uint8_t *)(vbase + sc->addr + (uint64_t)k * stride);
                             uint64_t slot;
                             if (ty == S_SYMBOL_STUBS) {
-                                if (k < 3) vxLogRaw([NSString stringWithFormat:@"raw %x %x %x",
-                                                     *(const uint32_t *)sp,
-                                                     *(const uint32_t *)(sp + 4),
-                                                     *(const uint32_t *)(sp + 8)]);
                                 slot = vxStubSlot(sp, lo, hi);
                                 if (!slot) { malo++; continue; }
                             } else {
                                 slot = (uint64_t)sp;
-                                if (slot < lo || slot + 8 > hi) { malo++; continue; }
                             }
                             uint64_t fn = VX_STRIP(*(const uint64_t *)slot);
                             if (!fn) { nulo++; continue; }
-                            const char *sn = NULL;
-                            if (vxDladdr) {
-                                Dl_info di;
-                                if (vxDladdr((const void *)fn, &di)) sn = di.dli_sname;
+                            int t = vxByAddr(fn);
+                            if (t < 0) {
+                                const char *sn = NULL;
+                                if (vxDladdr) {
+                                    Dl_info di;
+                                    if (vxDladdr((const void *)fn, &di)) sn = di.dli_sname;
+                                }
+                                t = vxByName(sn);
+                                if (t < 0) { if (!sn) noname++; continue; }
                             }
-                            if (ty == S_LAZY_SYMBOL_POINTERS && k < 5)
-                                vxLogRaw([NSString stringWithFormat:@"v %llx %s", fn, sn ? sn : "-"]);
-                            int t = vxMatch(sn);
-                            if (t < 0) { if (!sn) noname++; continue; }
+                            if (vxDone[t]) continue;
                             kern_return_t kp = vxProt((uint64_t)sp, wr);
                             if (kp != KERN_SUCCESS) { malo++; continue; }
                             if (ty == S_SYMBOL_STUBS) {
@@ -427,16 +436,17 @@ static uint32_t vxPatch(void) {
                                 ins[3] = 0xd503201fu;
                                 memcpy(sp, ins, wr);
                                 sys_icache_invalidate(sp, wr);
-                                vxLogRaw([NSString stringWithFormat:@"S %s", vxNames[t]]);
                                 stubs++;
                             } else {
                                 vxOrig[t] = (vxFn)fn;
                                 *(uint64_t *)slot = auth ? VX_SIGN(vxTab[t], slot)
                                                          : (uint64_t)vxTab[t];
-                                vxLogRaw([NSString stringWithFormat:@"P %s", vxNames[t]]);
                                 hits++;
                             }
                             vxDone[t] = 1;
+                            if (f++ < 40)
+                                vxLogRaw([NSString stringWithFormat:@"%c %s",
+                                          ty == S_SYMBOL_STUBS ? 'S' : 'P', vxNames[t]]);
                         }
                     }
                 }
@@ -511,6 +521,6 @@ static void vxRetry(void) {
 __attribute__((constructor))
 static void vxInit(void) {
     vxT0 = vxNow();
-    vxLogRaw(@"==== 194 sonda ====");
+    vxLogRaw(@"==== 195 direccion ====");
     dispatch_async(dispatch_get_global_queue(0, 0), ^{ vxStep(); });
 }
