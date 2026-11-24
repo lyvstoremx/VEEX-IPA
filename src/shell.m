@@ -1,4 +1,4 @@
-// VEEX shell build 188 — sin cirugía de arreglo, índice vivo, log por etapa
+// VEEX shell build 190 — prot con EXECUTE y escritura a stride
 
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
@@ -18,7 +18,7 @@
 #include <dlfcn.h>
 #include <time.h>
 
-#define VX_BUILD  188
+#define VX_BUILD  190
 #define VX_N      28
 #define VX_MAXLOG 40
 #define VX_TRIES  40
@@ -166,7 +166,6 @@ static uint32_t vxRealCount(void) {
     return vxOrig[22] ? ((uint32_t (*)(void))(uintptr_t)vxOrig[22])() : _dyld_image_count();
 }
 
-// índice real, recalculado si dyld re-sincronizó el arreglo
 static uint32_t vxIdx(void) {
     static uint32_t c = 0;
     if (!vxSelfPath) return 0;
@@ -267,13 +266,14 @@ static vxFn vxTab[VX_N] = {
     vxW24, vxW25, vxW26, vxW27
 };
 
+// R + W + X + COPY: sin la X la página deja de ejecutarse
 static kern_return_t vxProt(uint64_t addr, size_t len) {
     vm_size_t ps = vm_page_size;
     uintptr_t a = (uintptr_t)addr & ~((uintptr_t)ps - 1);
     uintptr_t e = ((uintptr_t)addr + len + ps - 1) & ~((uintptr_t)ps - 1);
     size_t l = (size_t)(e - a);
     kern_return_t k = vm_protect(mach_task_self(), (vm_address_t)a, (vm_size_t)l, false,
-                                 VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY);
+                                 VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXECUTE | VM_PROT_COPY);
     if (k == KERN_SUCCESS) return k;
     if (mprotect((void *)a, l, PROT_READ | PROT_WRITE | PROT_EXEC) == 0) return KERN_SUCCESS;
     return k;
@@ -316,8 +316,6 @@ static void vxSelf(void) {
     vxSelfHi = (uint64_t)h + hi;
     vxLogRaw([NSString stringWithFormat:@"self %u %llx-%llx", vxIdx(), vxSelfLo, vxSelfHi]);
 }
-
-// --- lectura del arreglo, sin escribir ---
 
 static void vxInfo(void) {
     const struct dyld_all_image_infos *ai = vxInfos();
@@ -371,8 +369,9 @@ static uint32_t vxPatch(void) {
                 if (ty == S_LAZY_SYMBOL_POINTERS || ty == S_SYMBOL_STUBS) {
                     uint32_t stride = (ty == S_SYMBOL_STUBS) ? sc->reserved2 : 8;
                     if (stride && sc->size) {
-                        vxLogRaw([NSString stringWithFormat:@"sec %s ty=%x n=%llu",
-                                  sc->sectname, ty, (uint64_t)(sc->size / stride)]);
+                        uint32_t wr = (stride < 16) ? stride : 16;
+                        vxLogRaw([NSString stringWithFormat:@"sec %s ty=%x n=%llu st=%u wr=%u",
+                                  sc->sectname, ty, (uint64_t)(sc->size / stride), stride, wr]);
                         for (uint32_t k = 0; k < sc->size / stride; k++) {
                             uint32_t si = ind[sc->reserved1 + k];
                             if (si & (INDIRECT_SYMBOL_LOCAL | INDIRECT_SYMBOL_ABS)) continue;
@@ -381,7 +380,7 @@ static uint32_t vxPatch(void) {
                                 if (vxDone[t] || strcmp(nm, vxNames[t])) continue;
                                 if (ty == S_SYMBOL_STUBS) {
                                     uint8_t *sp = (uint8_t *)(vbase + sc->addr + (uint64_t)k * stride);
-                                    kern_return_t kp = vxProt((uint64_t)sp, 16);
+                                    kern_return_t kp = vxProt((uint64_t)sp, wr);
                                     vxLogRaw([NSString stringWithFormat:@"hit S %s p=%d", nm, kp]);
                                     if (kp != KERN_SUCCESS) break;
                                     uint64_t fn = (uint64_t)vxTab[t];
@@ -392,8 +391,8 @@ static uint32_t vxPatch(void) {
                                     ins[1] = 0xf2a00010u | (hi << 5);
                                     ins[2] = 0xd61f0200u;
                                     ins[3] = 0xd503201fu;
-                                    memcpy(sp, ins, 16);
-                                    sys_icache_invalidate(sp, 16);
+                                    memcpy(sp, ins, wr);
+                                    sys_icache_invalidate(sp, wr);
                                     vxLogRaw([NSString stringWithFormat:@"S ok %llx", (uint64_t)sp]);
                                     stubs++;
                                 } else {
@@ -422,8 +421,6 @@ static uint32_t vxPatch(void) {
     vxLogRaw([NSString stringWithFormat:@"pasada slot=%u stub=%u total=%u", hits, stubs, vxPatched]);
     return hits + stubs;
 }
-
-// --- volcado ---
 
 static void vxImgs(void) {
     const struct dyld_all_image_infos *ai = vxInfos();
@@ -484,6 +481,6 @@ static void vxRetry(void) {
 __attribute__((constructor))
 static void vxInit(void) {
     vxT0 = vxNow();
-    vxLogRaw(@"==== 188 sin cirugia ====");
+    vxLogRaw(@"==== 190 prot exec ====");
     dispatch_async(dispatch_get_global_queue(0, 0), ^{ vxStep(); });
 }
